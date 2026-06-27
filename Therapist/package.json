@@ -1,0 +1,24 @@
+{
+  "name": "physioai-therapist-frontend",
+  "version": "1.0.0",
+  "private": true,
+  "description": "PhysioAI Therapist web console — served via Node so the CSP allows MediaPipe WASM",
+  "scripts": {
+    "start": "node server.js",
+    "supabase:login": "npx supabase login",
+    "supabase:link": "npx supabase link --project-ref hptkdtzrhotmasznecwj",
+    "supabase:push": "npx supabase db push --linked",
+    "supabase:push:dry": "npx supabase db push --linked --dry-run",
+    "supabase:advisors": "npx supabase db advisors --linked",
+    "vercel:dev": "npx vercel dev",
+    "vercel:deploy": "npx vercel deploy",
+    "vercel:deploy:prod": "npx vercel deploy --prod"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "2.108.2",
+    "express": "^4.19.2"
+  },
+  "devDependencies": {
+    "supabase": "2.108.0"
+  }
+}
