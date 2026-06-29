@@ -319,7 +319,15 @@ export function renderCapturePanel({
     ? [datasetRecorder, datasetReview]
     : S.captureWorkflow === 'validate'
       ? [renderModelValidationPanel({ exercise: ex, reference: S.reference, readiness: S.aiReadiness, h, lang }), scoreCard, table]
-      : [renderAiExerciseWizard({ exercise: ex, h, lang }), ...(clipEditor ? [clipEditor] : []), scoreCard, presCard];
+      : [renderAiExerciseWizard({
+        exercise: ex,
+        reference: S.reference,
+        datasetRows: S.dataset.rows || [],
+        readiness: S.aiReadiness,
+        h,
+        lang,
+        actions: { setCaptureWorkflow },
+      }), ...(clipEditor ? [clipEditor] : []), scoreCard, presCard];
   const advancedPanels = S.advancedOpen && S.captureWorkflow !== 'validate' ? [table] : [];
   panel.append(workflowTabs, exSel, angleCard, ...workflowPanels, ...advancedPanels);
   if (S.reference) actions.updateTable(null);

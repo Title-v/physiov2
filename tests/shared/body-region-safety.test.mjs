@@ -4,6 +4,7 @@ import {
   defaultLandmarkSchemaIdForBodyRegion,
   getBodyRegionLandmarkSchema,
   landmarkSchemaMetadataForExercise,
+  resolveBodyRegionLandmarkSchema,
 } from '../../shared/ai/BodyRegionLandmarkSchema.js';
 import { evaluateMotionSafetyGate } from '../../shared/ai/MotionSafetyGate.js';
 import { evaluateBoundaryBox } from '../../shared/ai/BoundaryBoxGate.js';
@@ -20,6 +21,8 @@ test('body-region schema resolves primary stabilizer and model input landmarks',
   const metadata = landmarkSchemaMetadataForExercise({ id: 'custom', bodyRegion: 'right_arm' });
   assert.equal(metadata.landmarkSchemaId, 'right_arm.v1');
   assert.deepEqual(metadata.jointNames, ['right_shoulder', 'right_elbow']);
+  assert.equal(resolveBodyRegionLandmarkSchema('made_up.v1', { fallback: false }), null);
+  assert.equal(getBodyRegionLandmarkSchema('made_up.v1').id, 'full.v1');
 });
 
 test('motion safety gate requires primary and stabilizer landmarks before training', () => {
@@ -42,6 +45,12 @@ test('motion safety gate requires primary and stabilizer landmarks before traini
   assert.equal(stabilizer.ok, false);
   assert.equal(stabilizer.status, 'low_visibility');
   assert.deepEqual(stabilizer.missingStabilizer, ['left_shoulder']);
+
+  const unknownSchema = evaluateMotionSafetyGate(pose, { exercise: { bodyRegion: 'right_arm', landmarkSchemaId: 'made_up.v1' } });
+  assert.equal(unknownSchema.ok, false);
+  assert.equal(unknownSchema.trainable, false);
+  assert.equal(unknownSchema.status, 'missing_schema');
+  assert.equal(unknownSchema.schemaId, 'made_up.v1');
 });
 
 test('boundary gate keeps legacy inside/outside status and exposes AI readiness fields', () => {

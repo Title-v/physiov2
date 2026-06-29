@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   buildDatasetJsonlExportForCapture,
+  buildDatasetPreviewSequence,
   buildMotionDatasetJsonlFromSkeletonPayload,
   buildMotionDatasetRowFromSkeletonExport,
   buildMotionClipEditorModel,
@@ -12,6 +13,7 @@ import {
   downloadJsonFile,
   downloadTextFile,
   exportTimestamp,
+  datasetFrameLandmarks,
   jumpClipPreviewIndex,
   phaseForClipFrame,
   safeExportId,
@@ -97,6 +99,46 @@ test('stopClipPlaybackState clears playback fields and cancels RAF', () => {
   assert.equal(state.previewLastAt, 0);
   assert.equal(state.previewRaf, 0);
   assert.deepEqual(cancelled, [42]);
+});
+
+test('buildDatasetPreviewSequence converts reviewed rows into playable frame sequences', () => {
+  const row = {
+    id: 'rep_1',
+    exerciseId: 'shoulder',
+    motionLabel: 'good',
+    labelStatus: 'draft',
+    dataQuality: 'usable',
+    landmarkSchemaId: 'right_arm.v1',
+    frames: [
+      { t: 0, phase: 'rest', landmarks: [[0.1, 0.2, 0, 0.9]], angles: { right_shoulder: 20 }, boundaryStatus: 'inside' },
+      { t: 120, phase: 'moving_to_target', landmarks: [{ x: 0.2, y: 0.3, z: 0, visibility: 0.8 }], angles: { right_shoulder: 70 }, boundaryStatus: 'inside' },
+      { t: 240, phase: 'target', landmarks: [[0.3, 0.4, 0, 0.9]], angles: { right_shoulder: 120 }, boundaryStatus: 'inside' },
+      { t: 360, phase: 'returning', landmarks: [[0.2, 0.3, 0, 0.9]], angles: { right_shoulder: 65 }, boundaryStatus: 'inside' },
+    ],
+  };
+  const sequence = buildDatasetPreviewSequence(row);
+
+  assert.equal(sequence.kind, 'dataset_row');
+  assert.equal(sequence.rowId, 'rep_1');
+  assert.equal(sequence.startIdx, 0);
+  assert.equal(sequence.targetIdx, 2);
+  assert.equal(sequence.endIdx, 3);
+  assert.deepEqual(sequence.frames[0].landmarks, [{ x: 0.1, y: 0.2, z: 0, visibility: 0.9 }]);
+  assert.deepEqual(sequence.frames[1].jointAngles, { right_shoulder: 70 });
+  assert.deepEqual(datasetFrameLandmarks({ landmarks: [[0.4, 0.5, 0, 0.7]] }), [{ x: 0.4, y: 0.5, z: 0, visibility: 0.7 }]);
+});
+
+test('buildDatasetPreviewSequence prefers exported clip target marker when present', () => {
+  const sequence = buildDatasetPreviewSequence({
+    metadata: { clip: { markers: { target: { clipFrameIndex: 1 } } } },
+    frames: [
+      { t: 0, phase: 'rest', landmarks: [[0.1, 0.2, 0, 0.9]], angles: { right_shoulder: 20 } },
+      { t: 100, phase: 'outbound', landmarks: [[0.2, 0.3, 0, 0.9]], angles: { right_shoulder: 60 } },
+      { t: 200, phase: 'target', landmarks: [[0.3, 0.4, 0, 0.9]], angles: { right_shoulder: 120 } },
+    ],
+  });
+
+  assert.equal(sequence.targetIdx, 1);
 });
 
 test('buildMotionClipEditorModel summarizes selected clip timing and labels', () => {

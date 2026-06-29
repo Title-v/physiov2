@@ -250,6 +250,20 @@ test('low-confidence AI quality is ignored so deterministic scoring remains auth
   assert.deepEqual(summary.aiSignalCounts, {});
 });
 
+test('unknown AI quality is ignored instead of becoming good', () => {
+  const exercise = { id: 'shoulder', type: 'rep', primaryJoint: 'right_shoulder', reps: 1, sets: 1 };
+  const engine = createMotionQualityEngine({ exercise, reference: motionReference(), dose: { reps: 1, sets: 1 } });
+  pushShoulder(engine, [20, 20, 60, 95, 120, 120, 80, 45, 20, 20], {
+    aiSignal: { phase: 'moving_to_target', quality: 'out_of_frame', confidence: 0.99 },
+  });
+  const summary = engine.finishSummary();
+
+  assert.equal(summary.reps, 1);
+  assert.equal(summary.validReps, 1);
+  assert.deepEqual(summary.aiSignalCounts, {});
+  assert.equal(summary.repSummaries[0].aiQualityScore, null);
+});
+
 test('completed out-of-frame rep is counted but invalid', () => {
   const exercise = { id: 'shoulder', type: 'rep', primaryJoint: 'right_shoulder', reps: 1, sets: 1 };
   const engine = createMotionQualityEngine({ exercise, reference: motionReference(), dose: { reps: 1, sets: 1 } });

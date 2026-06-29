@@ -204,7 +204,7 @@ function validModelPayload() {
     exerciseId: 'shoulder',
     version: 'v2',
     landmarkSchemaId: 'right_arm.v1',
-    inputShape: [30, 31],
+    inputShape: [30, 27],
     modelInputLandmarks: ['right_shoulder', 'right_elbow', 'right_wrist', 'left_shoulder', 'right_hip'],
     primaryRequiredLandmarks: ['right_shoulder', 'right_elbow', 'right_wrist'],
     stabilizerRequiredLandmarks: ['left_shoulder', 'right_hip'],

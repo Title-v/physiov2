@@ -123,11 +123,25 @@ export function inferLandmarkSchemaId(exercise = {}) {
     defaultLandmarkSchemaIdForBodyRegion(exercise?.bodyRegion || 'full');
 }
 
-export function getBodyRegionLandmarkSchema(schemaIdOrExercise = 'full.v1') {
+export function findBodyRegionLandmarkSchema(schemaId) {
+  return BODY_REGION_LANDMARK_SCHEMAS[schemaId] || null;
+}
+
+export function resolveBodyRegionLandmarkSchema(schemaIdOrExercise = 'full.v1', { fallback = true } = {}) {
+  const explicitSchemaId = typeof schemaIdOrExercise === 'string'
+    ? schemaIdOrExercise
+    : schemaIdOrExercise?.landmarkSchemaId || null;
   const schemaId = typeof schemaIdOrExercise === 'string'
     ? schemaIdOrExercise
     : inferLandmarkSchemaId(schemaIdOrExercise);
-  return BODY_REGION_LANDMARK_SCHEMAS[schemaId] || BODY_REGION_LANDMARK_SCHEMAS['full.v1'];
+  const resolved = findBodyRegionLandmarkSchema(schemaId);
+  if (resolved) return resolved;
+  if (explicitSchemaId && !fallback) return null;
+  return fallback ? BODY_REGION_LANDMARK_SCHEMAS['full.v1'] : null;
+}
+
+export function getBodyRegionLandmarkSchema(schemaIdOrExercise = 'full.v1') {
+  return resolveBodyRegionLandmarkSchema(schemaIdOrExercise, { fallback: true });
 }
 
 export function schemaLandmarkIndices(schemaOrId) {

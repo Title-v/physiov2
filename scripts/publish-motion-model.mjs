@@ -3,7 +3,10 @@
 import { cp, mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { modelManifestSchemaFields, resolveBodyRegionLandmarkSchema } from '../shared/ai/BodyRegionLandmarkSchema.js';
 import { evaluateModelApproval } from '../shared/ai/ModelApprovalCriteria.js';
+import { expectedMotionFeatureSizeForSchema } from '../shared/ai/MotionFeatureExtractor.js';
+import { TCN_PHASES, TCN_QUALITIES } from '../shared/ai/TcnMotionClassifier.js';
 
 function parseArgs(argv) {
   const args = {
@@ -40,8 +43,29 @@ function usage() {
 async function readManifest(modelDir) {
   const manifest = JSON.parse(await readFile(path.join(modelDir, 'manifest.json'), 'utf8'));
   if (!manifest.landmarkSchemaId) throw new Error('Model manifest is missing landmarkSchemaId.');
+  const schema = resolveBodyRegionLandmarkSchema(manifest.landmarkSchemaId, { fallback: false });
+  if (!schema) throw new Error(`Model manifest uses unknown landmarkSchemaId: ${manifest.landmarkSchemaId}.`);
+  const schemaFields = modelManifestSchemaFields(schema);
+  for (const key of ['modelInputLandmarks', 'primaryRequiredLandmarks', 'stabilizerRequiredLandmarks', 'jointNames']) {
+    if (!Array.isArray(manifest[key]) || !manifest[key].length) {
+      throw new Error(`Model manifest is missing ${key}.`);
+    }
+    if (JSON.stringify(manifest[key]) !== JSON.stringify(schemaFields[key])) {
+      throw new Error(`Model manifest ${key} does not match ${manifest.landmarkSchemaId}.`);
+    }
+  }
+  if (manifest.bodyRegion && manifest.bodyRegion !== schemaFields.bodyRegion) {
+    throw new Error(`Model manifest bodyRegion does not match ${manifest.landmarkSchemaId}.`);
+  }
   if (!Array.isArray(manifest.inputShape) || manifest.inputShape.length !== 2) {
     throw new Error('Model manifest is missing inputShape [window, feature].');
+  }
+  const expectedFeatureSize = expectedMotionFeatureSizeForSchema({ landmarkSchema: schema });
+  if (!Number.isInteger(Number(manifest.inputShape[0])) || Number(manifest.inputShape[0]) <= 0) {
+    throw new Error('Model manifest inputShape window must be a positive integer.');
+  }
+  if (Number(manifest.inputShape[1]) !== expectedFeatureSize) {
+    throw new Error(`Model manifest inputShape feature size ${manifest.inputShape[1]} does not match ${manifest.landmarkSchemaId} feature size ${expectedFeatureSize}.`);
   }
   return manifest;
 }
@@ -52,11 +76,29 @@ async function readEvaluation(filePath) {
   return payload.evaluation || payload.metrics || payload;
 }
 
+function sameStringArray(a, b) {
+  return Array.isArray(a) &&
+    Array.isArray(b) &&
+    a.length === b.length &&
+    a.every((value, index) => value === b[index]);
+}
+
 export async function publishMotionModel(args) {
   if (!args.model) throw new Error('Missing --model path/to/tfjs-model');
   const manifest = await readManifest(args.model);
+  if (!sameStringArray(manifest.phases, TCN_PHASES)) {
+    throw new Error('Model manifest phases do not match the supported TCN phase schema.');
+  }
+  if (!sameStringArray(manifest.qualities, TCN_QUALITIES)) {
+    throw new Error('Model manifest qualities do not match the supported TCN quality schema.');
+  }
   const evaluation = await readEvaluation(args.evaluation) || manifest.evaluation || manifest.accuracy || null;
-  const approval = manifest.approval || evaluateModelApproval({ evaluation: evaluation || {} });
+  if (args.approve && evaluation?.evaluatedSplit && evaluation.evaluatedSplit !== 'validation') {
+    throw new Error(`Cannot approve model: evaluation must use validation split, got ${evaluation.evaluatedSplit}.`);
+  }
+  const approval = evaluation
+    ? evaluateModelApproval({ evaluation })
+    : (manifest.approval || evaluateModelApproval({ evaluation: {} }));
   if (args.approve && approval.ok !== true) {
     throw new Error(`Cannot approve model: ${(approval.issues || ['approval_failed']).join(', ')}`);
   }

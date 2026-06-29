@@ -23,16 +23,17 @@ export function renderDatasetReviewPanel({
     ...(S.dataset.reviewOpen ? rows.map((row, index) => {
       const reviewed = row.labelStatus === 'reviewed';
       const rejected = row.labelStatus === 'auto_rejected' || row.dataQuality !== 'usable';
+      const previewing = S.dataset.previewRowIndex === index && S.dataset.previewPlaying;
       return h('div', { class: 'col gap6', style: { borderTop: '1px solid var(--line)', paddingTop: '8px' } },
         h('div', { class: 'row between', style: { alignItems: 'baseline' } },
           h('b', {}, `Rep ${index + 1}`),
-          h('span', { class: 'pill ' + (reviewed ? 'good' : rejected ? 'bad' : 'warn') },
-            reviewed ? `reviewed ${row.motionLabel}` : (row.dataQuality || row.labelStatus || 'draft'))),
+          h('span', { class: 'pill ' + (previewing ? 'brand' : reviewed ? 'good' : rejected ? 'bad' : 'warn') },
+            previewing ? 'previewing' : reviewed ? `reviewed ${row.motionLabel}` : (row.dataQuality || row.labelStatus || 'draft'))),
         h('div', { class: 'muted', style: { fontSize: '12px' } },
           `${row.frames?.length || 0} frames · schema ${row.landmarkSchemaId || 'missing'}`),
         h('div', { class: 'row gap6 wrap' },
           h('button', {
-            class: 'mini',
+            class: 'mini' + (previewing ? ' primary' : ''),
             disabled: row.frames?.length ? null : '',
             onclick: () => actions.previewDatasetRep?.(index),
           }, lang === 'th' ? 'เล่น' : 'Play'),

@@ -148,3 +148,30 @@ test('dataset review disables motion-label buttons for auto rejected reps', () =
   play.props.onclick();
   assert.deepEqual(previewed, [0]);
 });
+
+test('dataset review marks the actively playing preview row', () => {
+  const panel = renderDatasetReviewPanel({
+    S: {
+      dataset: {
+        reviewOpen: true,
+        previewRowIndex: 1,
+        previewPlaying: true,
+        rows: [
+          { id: 'rep_1', dataQuality: 'usable', labelStatus: 'draft', frames: [{}], landmarkSchemaId: 'right_arm.v1' },
+          { id: 'rep_2', dataQuality: 'usable', labelStatus: 'draft', frames: [{}], landmarkSchemaId: 'right_arm.v1' },
+        ],
+      },
+    },
+    h,
+    actions: {
+      previewDatasetRep() {},
+      reviewDatasetRep() {},
+      skipDatasetRep() {},
+      toggleDatasetReview() {},
+    },
+  });
+  const playButtons = findAll(panel, (node) => node.tag === 'button' && textOf(node) === 'Play');
+
+  assert.match(textOf(panel), /previewing/);
+  assert.equal(playButtons[1].props.class, 'mini primary');
+});

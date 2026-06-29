@@ -19,12 +19,25 @@ def load_features(path: Path) -> dict:
     return payload
 
 
+def split_samples(samples: list[dict], validation_ratio: float = 0.2) -> tuple[list[dict], list[dict]]:
+    train = [sample for sample in samples if sample.get("split") != "validation"]
+    validation = [sample for sample in samples if sample.get("split") == "validation"]
+    if validation or len(samples) < 2:
+        return train or samples, validation
+    ratio = min(0.5, max(0.0, float(validation_ratio or 0.0)))
+    if ratio <= 0:
+        return samples, []
+    validation_count = min(len(samples) - 1, max(1, int(len(samples) * ratio)))
+    return samples[:-validation_count], samples[-validation_count:]
+
+
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--features", required=True, help="Path from scripts/build-motion-features.mjs")
     parser.add_argument("--out", default="training/artifacts/motion-tcn.keras")
     parser.add_argument("--epochs", type=int, default=20)
     parser.add_argument("--batch-size", type=int, default=16)
+    parser.add_argument("--validation-ratio", type=float, default=0.2)
     parser.add_argument("--dry-run", action="store_true")
     return parser
 
@@ -32,11 +45,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
 def main() -> None:
     args = build_arg_parser().parse_args()
     payload = load_features(Path(args.features))
+    train_samples, validation_samples = split_samples(payload["samples"], args.validation_ratio)
     summary = {
         "ok": True,
         "features": args.features,
         "out": args.out,
         "samples": len(payload["samples"]),
+        "trainSamples": len(train_samples),
+        "validationSamples": len(validation_samples),
         "inputShape": payload["inputShape"],
         "landmarkSchemaId": payload["landmarkSchemaId"],
         "phases": payload["phases"],
@@ -55,9 +71,15 @@ def main() -> None:
             "Keras training requires numpy and tensorflow in the training environment."
         ) from exc
 
-    x = np.array([sample["window"] for sample in payload["samples"]], dtype="float32")
-    y_phase = np.array([sample["phaseOneHot"] for sample in payload["samples"]], dtype="float32")
-    y_quality = np.array([sample["qualityOneHot"] for sample in payload["samples"]], dtype="float32")
+    x = np.array([sample["window"] for sample in train_samples], dtype="float32")
+    y_phase = np.array([sample["phaseOneHot"] for sample in train_samples], dtype="float32")
+    y_quality = np.array([sample["qualityOneHot"] for sample in train_samples], dtype="float32")
+    validation_data = None
+    if validation_samples:
+        validation_x = np.array([sample["window"] for sample in validation_samples], dtype="float32")
+        validation_phase = np.array([sample["phaseOneHot"] for sample in validation_samples], dtype="float32")
+        validation_quality = np.array([sample["qualityOneHot"] for sample in validation_samples], dtype="float32")
+        validation_data = (validation_x, {"phase": validation_phase, "quality": validation_quality})
 
     inputs = tf.keras.Input(shape=tuple(payload["inputShape"]), name="motion_window")
     hidden = tf.keras.layers.Conv1D(48, 3, padding="causal", dilation_rate=1, activation="relu")(inputs)
@@ -77,6 +99,7 @@ def main() -> None:
         epochs=max(1, args.epochs),
         batch_size=max(1, args.batch_size),
         shuffle=True,
+        validation_data=validation_data,
     )
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)

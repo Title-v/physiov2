@@ -17,11 +17,33 @@ def load_features(path: Path) -> dict:
     return payload
 
 
+def split_samples(samples: list[dict], validation_ratio: float = 0.2) -> tuple[list[dict], list[dict]]:
+    train = [sample for sample in samples if sample.get("split") != "validation"]
+    validation = [sample for sample in samples if sample.get("split") == "validation"]
+    if validation or len(samples) < 2:
+        return train or samples, validation
+    ratio = min(0.5, max(0.0, float(validation_ratio or 0.0)))
+    if ratio <= 0:
+        return samples, []
+    validation_count = min(len(samples) - 1, max(1, int(len(samples) * ratio)))
+    return samples[:-validation_count], samples[-validation_count:]
+
+
+def evaluation_samples(payload: dict, validation_ratio: float = 0.2, use_all_samples: bool = False) -> tuple[str, list[dict], list[dict], list[dict]]:
+    samples = payload["samples"]
+    train, validation = split_samples(samples, validation_ratio)
+    if use_all_samples or not validation:
+        return "all", samples, train, validation
+    return "validation", validation, train, validation
+
+
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model", required=True, help=".keras model produced by train_motion_tcn_keras.py")
     parser.add_argument("--features", required=True, help="Feature JSON produced by scripts/build-motion-features.mjs")
     parser.add_argument("--out", default="training/artifacts/evaluation.json")
+    parser.add_argument("--validation-ratio", type=float, default=0.2)
+    parser.add_argument("--use-all-samples", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     return parser
 
@@ -48,11 +70,20 @@ def classification_report(true_ids, pred_ids, labels):
 def main() -> None:
     args = build_arg_parser().parse_args()
     payload = load_features(Path(args.features))
+    evaluated_split, samples, train_samples, validation_samples = evaluation_samples(
+        payload,
+        validation_ratio=args.validation_ratio,
+        use_all_samples=args.use_all_samples,
+    )
     summary = {
         "ok": True,
         "model": args.model,
         "features": args.features,
         "samples": len(payload["samples"]),
+        "trainSamples": len(train_samples),
+        "validationSamples": len(validation_samples),
+        "evaluatedSamples": len(samples),
+        "evaluatedSplit": evaluated_split,
         "inputShape": payload["inputShape"],
         "landmarkSchemaId": payload.get("landmarkSchemaId"),
         "dryRun": args.dry_run,
@@ -70,9 +101,9 @@ def main() -> None:
         ) from exc
 
     model = tf.keras.models.load_model(args.model)
-    x = np.array([sample["window"] for sample in payload["samples"]], dtype="float32")
-    y_phase = np.array([sample["phaseOneHot"] for sample in payload["samples"]], dtype="float32")
-    y_quality = np.array([sample["qualityOneHot"] for sample in payload["samples"]], dtype="float32")
+    x = np.array([sample["window"] for sample in samples], dtype="float32")
+    y_phase = np.array([sample["phaseOneHot"] for sample in samples], dtype="float32")
+    y_quality = np.array([sample["qualityOneHot"] for sample in samples], dtype="float32")
     values = model.evaluate(x, {"phase": y_phase, "quality": y_quality}, verbose=0, return_dict=True)
     summary["metrics"] = {key: float(value) for key, value in values.items()}
     predicted = model.predict(x, verbose=0)
@@ -84,6 +115,8 @@ def main() -> None:
     phase_report = classification_report(phase_true_ids, phase_pred_ids, payload["phases"])
     quality_report = classification_report(quality_true_ids, quality_pred_ids, payload["qualities"])
     summary["evaluation"] = {
+        "sampleCount": len(samples),
+        "evaluatedSplit": evaluated_split,
         "phaseAccuracy": float(phase_report["accuracy"]),
         "qualityAccuracy": float(quality_report["accuracy"]),
         "perLabelRecall": quality_report["perLabelRecall"],

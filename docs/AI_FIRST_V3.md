@@ -36,9 +36,23 @@ repo-native terms.
   - `scripts/publish-motion-model.mjs`
   - `training/train_motion_tcn_keras.py`
   - `training/evaluate_motion_tcn_keras.py`
+- Training feature generation uses deterministic train/validation splits, and
+  model training writes evaluation metadata for approval checks.
+- Keras evaluation prefers the held-out validation split when present, and
+  publishing refuses approval from reports that explicitly evaluate all samples.
 - Therapist Capture Dataset workflow panels for readiness, recording, review,
   and reviewed JSONL export.
+- Therapist Capture AI exercise setup now derives an actionable step model:
+  schema, reference, dataset readiness, model deployment, and validation.
+- Therapist Capture validation can run the shared motion processor with the
+  deployed model classifier when a compatible model is available.
 - Patient home is plan-first for real sessions; built-in extras are demo-only.
+- Patient practice can use AI phase transitions as the primary rep/session
+  summary path, with rule-based rep counting retained as fallback.
+- Practice session payloads are version 3 and include `scoreSource` plus
+  AI-quality score breakdown fields.
+- `/datasets` and `/ai-models` routes persist reviewed dataset rows and model
+  manifest metadata through the shared API/Supabase runtime.
 
 ## Runtime Policy
 
@@ -64,6 +78,16 @@ When AI is usable:
 finalScore = aiQualityScore * 0.85 + referenceRuleScore * 0.15
 ```
 
+AI phase labels are used for primary rep counting:
+
+```txt
+rest → moving_to_target → target → returning → rest = 1 rep
+```
+
+The completed session summary uses `scoreSource: "ai_primary"` only after the
+AI phase counter completes a rep. If no approved/confident AI phase cycle
+completes, the summary falls back to rule-based reps with `scoreSource: "rule"`.
+
 When AI is unavailable or low confidence:
 
 ```txt
@@ -72,8 +96,9 @@ finalScore = referenceRuleScore
 
 ## Remaining Work
 
-- Store dataset rows and model versions through real API/Supabase routes.
-- Add full therapist AI exercise wizard and model validation panel.
 - Add richer dataset review playback controls.
-- Add minimum dataset size and model approval criteria checks.
 - Convert/publish a real trained TFJS model and validate it in browser.
+- Tune dataset minimums, approval thresholds, and AI confidence using real
+  recorded patient/therapist data.
+- Move from local JSONL/export-driven training to an operational training job
+  when deployment requirements are clear.

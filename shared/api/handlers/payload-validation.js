@@ -1,7 +1,13 @@
+import { modelManifestSchemaFields, resolveBodyRegionLandmarkSchema } from '../../ai/BodyRegionLandmarkSchema.js';
+import { evaluateModelApproval } from '../../ai/ModelApprovalCriteria.js';
+import { expectedMotionFeatureSizeForSchema } from '../../ai/MotionFeatureExtractor.js';
+import { TCN_PHASES, TCN_QUALITIES } from '../../ai/TcnMotionClassifier.js';
+
 const MAX_TEXT = 5000;
 const MAX_ITEMS = 100;
 const MAX_JSON_BYTES = 250_000;
 const MOTION_LABELS = ['good', 'incomplete', 'wrong_path', 'unstable'];
+const SESSION_SCORE_SOURCES = ['rule', 'ai_primary'];
 
 function issue(path, code) {
   return `${path}:${code}`;
@@ -135,6 +141,7 @@ export function validateSessionPayload(body = {}) {
   for (const key of ['score', 'avgScore', 'reps', 'validReps', 'invalidRepCount', 'sessionVersion']) {
     if (body[key] != null && !Number.isFinite(Number(body[key]))) issues.push(issue(key, 'number_required'));
   }
+  if (body.scoreSource != null && !SESSION_SCORE_SOURCES.includes(body.scoreSource)) issues.push(issue('scoreSource', 'invalid'));
   if (body.summary != null && !isPlainObject(body.summary)) issues.push(issue('summary', 'object_required'));
   if (body.scoreBreakdown != null && !isPlainObject(body.scoreBreakdown)) issues.push(issue('scoreBreakdown', 'object_required'));
   if (issues.length) return validationFail(issues);
@@ -151,6 +158,36 @@ function validateInputShape(value) {
   return Array.isArray(value) &&
     value.length === 2 &&
     value.every((item) => Number.isInteger(Number(item)) && Number(item) > 0);
+}
+
+function sameStringArray(a, b) {
+  return Array.isArray(a) &&
+    Array.isArray(b) &&
+    a.length === b.length &&
+    a.every((value, index) => value === b[index]);
+}
+
+function validateSchemaMetadata(body, landmarkSchemaId, issues) {
+  if (!landmarkSchemaId) return null;
+  const schema = resolveBodyRegionLandmarkSchema(landmarkSchemaId, { fallback: false });
+  if (!schema) {
+    issues.push(issue('landmarkSchemaId', 'unknown'));
+    return null;
+  }
+  const schemaFields = modelManifestSchemaFields(schema);
+  for (const key of ['modelInputLandmarks', 'primaryRequiredLandmarks', 'stabilizerRequiredLandmarks', 'jointNames']) {
+    if (Array.isArray(body[key]) && body[key].length && !sameStringArray(body[key], schemaFields[key])) {
+      issues.push(issue(key, 'schema_mismatch'));
+    }
+  }
+  if (body.bodyRegion != null && body.bodyRegion !== schemaFields.bodyRegion) {
+    issues.push(issue('bodyRegion', 'schema_mismatch'));
+  }
+  if (validateInputShape(body.inputShape)) {
+    const expectedFeatureSize = expectedMotionFeatureSizeForSchema({ landmarkSchema: schema });
+    if (Number(body.inputShape[1]) !== expectedFeatureSize) issues.push(issue('inputShape', 'schema_mismatch'));
+  }
+  return schemaFields;
 }
 
 export function validateDatasetPayload(body = {}) {
@@ -172,6 +209,7 @@ export function validateDatasetPayload(body = {}) {
   if (!isStringArray(body.stabilizerRequiredLandmarks, { nonEmpty: true })) issues.push(issue('stabilizerRequiredLandmarks', 'required'));
   if (!isStringArray(body.modelInputLandmarks, { nonEmpty: true })) issues.push(issue('modelInputLandmarks', 'required'));
   if (!isStringArray(body.jointNames, { nonEmpty: true })) issues.push(issue('jointNames', 'required'));
+  const schemaFields = validateSchemaMetadata(body, landmarkSchemaId, issues);
   if (body.id != null && !safeIdentifier(body.id, { max: 180 })) issues.push(issue('id', 'invalid'));
   if (body.subjectId != null && !safeIdentifier(body.subjectId, { max: 180 })) issues.push(issue('subjectId', 'invalid'));
   if (issues.length) return validationFail(issues);
@@ -181,6 +219,7 @@ export function validateDatasetPayload(body = {}) {
     landmarkSchemaId,
     motionLabel,
     label: motionLabel,
+    ...(schemaFields || {}),
     missingPrimary: [],
     missingStabilizer: [],
   });
@@ -204,8 +243,14 @@ export function validateAiModelPayload(body = {}) {
   if (!isStringArray(body.jointNames, { nonEmpty: true })) issues.push(issue('jointNames', 'required'));
   if (!isStringArray(body.phases, { nonEmpty: true })) issues.push(issue('phases', 'required'));
   if (!isStringArray(body.qualities, { nonEmpty: true })) issues.push(issue('qualities', 'required'));
+  if (Array.isArray(body.phases) && !sameStringArray(body.phases, TCN_PHASES)) issues.push(issue('phases', 'schema_mismatch'));
+  if (Array.isArray(body.qualities) && !sameStringArray(body.qualities, TCN_QUALITIES)) issues.push(issue('qualities', 'schema_mismatch'));
+  const schemaFields = validateSchemaMetadata(body, landmarkSchemaId, issues);
   if (body.approved === true) {
-    const approval = body.approval || body.evaluation || {};
+    const evaluation = body.evaluation || body.metrics || body.accuracy || null;
+    const approval = isPlainObject(evaluation)
+      ? evaluateModelApproval({ evaluation })
+      : (body.approval || {});
     if (!isPlainObject(approval)) issues.push(issue('approval', 'object_required'));
     if (approval.ok !== true) issues.push(issue('approval', 'failed'));
     if (Array.isArray(approval.issues) && approval.issues.length) issues.push(issue('approval', 'failed'));
@@ -218,6 +263,7 @@ export function validateAiModelPayload(body = {}) {
     exerciseId,
     landmarkSchemaId,
     version,
+    ...(schemaFields || {}),
     approved: body.approved === true,
   });
 }

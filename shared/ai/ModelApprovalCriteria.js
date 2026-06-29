@@ -1,4 +1,5 @@
-import { MOTION_LABELS_V1 } from './DatasetLabeler.js';
+import { MOTION_LABELS_V1, normalizeMotionLabel } from './DatasetLabeler.js';
+import { modelManifestSchemaFields, resolveBodyRegionLandmarkSchema } from './BodyRegionLandmarkSchema.js';
 
 export const RECOMMENDED_DATASET_MINIMUMS = Object.freeze({
   good: 50,
@@ -24,11 +25,59 @@ function countBy(rows, keyFn) {
   return out;
 }
 
+function sameStringArray(a, b) {
+  return Array.isArray(a) &&
+    Array.isArray(b) &&
+    a.length === b.length &&
+    a.every((value, index) => value === b[index]);
+}
+
+function rowSchemaIssues(row = {}) {
+  const issues = [];
+  const schemaId = row.landmarkSchemaId || row.metadata?.landmarkSchemaId || null;
+  if (!schemaId) return ['missing_landmarkSchemaId'];
+  const schema = resolveBodyRegionLandmarkSchema(schemaId, { fallback: false });
+  if (!schema) return ['unknown_landmarkSchemaId'];
+  const schemaFields = modelManifestSchemaFields(schema);
+  for (const key of ['modelInputLandmarks', 'primaryRequiredLandmarks', 'stabilizerRequiredLandmarks', 'jointNames']) {
+    const value = row[key] || row.metadata?.[key] || [];
+    if (!Array.isArray(value) || !value.length) issues.push(`missing_${key}`);
+    else if (!sameStringArray(value, schemaFields[key])) issues.push(`${key}_schema_mismatch`);
+  }
+  return issues;
+}
+
+export function datasetRowReadinessIssues(row = {}) {
+  const issues = [];
+  const label = normalizeMotionLabel(row.motionLabel || row.label);
+  if (!label) issues.push('invalid_or_unlabeled_motion_label');
+  if (row.labelStatus !== 'reviewed') issues.push('labelStatus_not_reviewed');
+  if (row.trainable !== true) issues.push('trainable_not_true');
+  if (row.dataQuality !== 'usable') issues.push(`dataQuality_${row.dataQuality || 'missing'}`);
+  if (row.missingPrimary?.length) issues.push('missing_primary_required');
+  if (row.missingStabilizer?.length) issues.push('missing_stabilizer_required');
+  issues.push(...rowSchemaIssues(row));
+  return issues;
+}
+
 export function evaluateDatasetReadiness(rows = [], {
   minimums = RECOMMENDED_DATASET_MINIMUMS,
 } = {}) {
-  const trainable = (rows || []).filter((row) => row?.trainable === true && row?.labelStatus === 'reviewed' && row?.dataQuality === 'usable');
-  const byLabel = countBy(trainable, (row) => row.motionLabel || row.label);
+  const assessedRows = (rows || []).map((row, index) => ({
+    row,
+    index,
+    issues: datasetRowReadinessIssues(row),
+    motionLabel: normalizeMotionLabel(row?.motionLabel || row?.label),
+  }));
+  const trainable = assessedRows.filter((item) => !item.issues.length).map((item) => item.row);
+  const invalidRows = assessedRows
+    .filter((item) => item.issues.length && (item.row?.trainable === true || item.row?.labelStatus === 'reviewed'))
+    .map((item) => ({
+      index: item.index,
+      exerciseId: item.row?.exerciseId || 'unknown',
+      issues: item.issues,
+    }));
+  const byLabel = countBy(assessedRows.filter((item) => !item.issues.length), (item) => item.motionLabel);
   const subjects = new Set(trainable.map((row) => row.subjectId || row.metadata?.subjectId).filter(Boolean));
   const missingLabels = MOTION_LABELS_V1
     .map((label) => ({
@@ -41,6 +90,7 @@ export function evaluateDatasetReadiness(rows = [], {
   return {
     ok: !missingLabels.length && missingSubjects === 0,
     trainableRows: trainable.length,
+    invalidRows,
     byLabel,
     subjects: subjects.size,
     missingLabels,

@@ -6,7 +6,8 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { TCN_PHASES, TCN_QUALITIES } from '../shared/ai/TcnMotionClassifier.js';
-import { getBodyRegionLandmarkSchema, modelManifestSchemaFields } from '../shared/ai/BodyRegionLandmarkSchema.js';
+import { modelManifestSchemaFields, resolveBodyRegionLandmarkSchema } from '../shared/ai/BodyRegionLandmarkSchema.js';
+import { expectedMotionFeatureSizeForSchema } from '../shared/ai/MotionFeatureExtractor.js';
 
 function parseArgs(argv) {
   const args = {
@@ -41,7 +42,7 @@ function usage() {
     '',
     'Options:',
     '  --version NAME          Model version written into manifest',
-    '  --input-shape 30,139    Optional [window, feature] shape override',
+    '  --input-shape 30,27     Optional [window, feature] shape override; feature must match schema',
     '  --landmark-schema-id ID Body-region schema, default right_arm.v1',
     '  --dry-run               Validate inputs and print planned manifest without copying/converting',
   ].join('\n');
@@ -126,13 +127,24 @@ export async function prepareMotionTcnModel(args) {
 }
 
 function buildManifest({ version, inputShape = null, summary = null, landmarkSchemaId = 'right_arm.v1' } = {}) {
-  const schema = getBodyRegionLandmarkSchema(landmarkSchemaId);
+  const schema = resolveBodyRegionLandmarkSchema(landmarkSchemaId, { fallback: false });
+  if (!schema) throw new Error(`Unknown landmark schema: ${landmarkSchemaId}`);
+  const expectedFeatureSize = expectedMotionFeatureSizeForSchema({ landmarkSchema: schema });
+  const nextInputShape = Array.isArray(inputShape) && inputShape.length
+    ? inputShape
+    : [30, expectedFeatureSize];
+  if (!Array.isArray(nextInputShape) || nextInputShape.length !== 2 || !Number.isInteger(Number(nextInputShape[0])) || Number(nextInputShape[0]) <= 0) {
+    throw new Error('Input shape must be [window, feature] with a positive integer window.');
+  }
+  if (Number(nextInputShape[1]) !== expectedFeatureSize) {
+    throw new Error(`Input shape feature size ${nextInputShape[1]} does not match ${landmarkSchemaId} feature size ${expectedFeatureSize}.`);
+  }
   return {
     name: 'motion-tcn',
     version,
     modelPath: './model.json',
     ...modelManifestSchemaFields(schema),
-    inputShape: Array.isArray(inputShape) && inputShape.length ? inputShape : null,
+    inputShape: [Number(nextInputShape[0]), expectedFeatureSize],
     phases: TCN_PHASES,
     qualities: TCN_QUALITIES,
     exerciseScope: [],

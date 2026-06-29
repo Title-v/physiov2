@@ -76,6 +76,51 @@ export function stepClipPlaybackState(state, sequence, now) {
   };
 }
 
+export function datasetFrameLandmarks(frame = {}) {
+  return (frame.landmarks || [])
+    .map((point) => Array.isArray(point)
+      ? { x: point[0], y: point[1], z: point[2] || 0, visibility: point[3] ?? 0 }
+      : point)
+    .filter((point) => point && Number.isFinite(point.x) && Number.isFinite(point.y));
+}
+
+function datasetTargetFrameIndex(frames = [], row = {}) {
+  const markerIndex = row.metadata?.clip?.markers?.target?.clipFrameIndex;
+  if (Number.isInteger(markerIndex) && markerIndex >= 0 && markerIndex < frames.length) return markerIndex;
+  const explicitTarget = frames.findIndex((frame) => frame.phase === 'target');
+  if (explicitTarget >= 0) return explicitTarget;
+  const moving = frames.findIndex((frame) => frame.phase === 'moving_to_target' || frame.phase === 'outbound');
+  if (moving >= 0) return Math.max(moving, Math.floor(frames.length / 2));
+  return Math.floor(Math.max(0, frames.length - 1) / 2);
+}
+
+export function buildDatasetPreviewSequence(row = {}) {
+  const frames = (row.frames || [])
+    .map((frame, index) => ({
+      ...frame,
+      t: Number.isFinite(Number(frame.t)) ? Number(frame.t) : index * 100,
+      landmarks: datasetFrameLandmarks(frame),
+      jointAngles: frame.angles || frame.jointAngles || {},
+      boundaryStatus: frame.boundaryStatus || frame.boundary?.status || null,
+      phase: frame.phase || null,
+    }))
+    .filter((frame) => frame.landmarks.length || Object.keys(frame.jointAngles || {}).length);
+  if (!frames.length) return null;
+  return {
+    kind: 'dataset_row',
+    rowId: row.id || null,
+    exerciseId: row.exerciseId || null,
+    labelStatus: row.labelStatus || null,
+    motionLabel: row.motionLabel || row.suggestedLabel || null,
+    dataQuality: row.dataQuality || null,
+    landmarkSchemaId: row.landmarkSchemaId || null,
+    frames,
+    startIdx: 0,
+    targetIdx: datasetTargetFrameIndex(frames, row),
+    endIdx: frames.length - 1,
+  };
+}
+
 export function buildMotionClipEditorModel(sequence, exercise = {}, { lang = 'en', formatMs = (ms) => `${ms}ms` } = {}) {
   if (!sequence?.frames?.length) return null;
   const isAlternating = exercise?.movementPattern === 'alternating';

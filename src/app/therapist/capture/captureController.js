@@ -51,12 +51,16 @@ import {
 } from './sequenceRecorder.js';
 import {
   buildDatasetJsonlExportForCapture,
+  buildDatasetPreviewSequence,
   buildSkeletonExportPayloadForCapture,
   createClipPreviewRuntime,
   downloadJsonFile,
   downloadTextFile,
   exportTimestamp,
   safeExportId,
+  startClipPlaybackState,
+  stepClipPlaybackState,
+  stopClipPlaybackState,
   setSequenceMarkerFromPreviewIndex,
 } from './previewController.js';
 import { getValidationFrameProcessor, validationFeedbackText } from './validationController.js';
@@ -423,30 +427,65 @@ export function mountTherapistCapture() {
     }
   }
 
-  function datasetFrameLandmarks(frame = {}) {
-    return (frame.landmarks || [])
-      .map((point) => Array.isArray(point)
-        ? { x: point[0], y: point[1], z: point[2] || 0, visibility: point[3] ?? 0 }
-        : point)
-      .filter((point) => point && Number.isFinite(point.x) && Number.isFinite(point.y));
+  function stopDatasetPreview({ clearSequence = false, rerender = false } = {}) {
+    stopClipPlaybackState(S.dataset, cancelAnimationFrame);
+    if (clearSequence) {
+      S.dataset.previewSequence = null;
+      S.dataset.previewRowIndex = null;
+      S.dataset.previewFrameIdx = null;
+    }
+    if (rerender) renderPanel();
+  }
+
+  function drawDatasetPreviewFrame(sequence, index) {
+    const frame = sequence?.frames?.[index];
+    if (!frame || !R.canvas) return false;
+    const ctx = R.canvas.getContext('2d');
+    ctx.clearRect(0, 0, R.canvas.width, R.canvas.height);
+    const landmarks = frame.landmarks || [];
+    if (landmarks.length) {
+      drawer ||= makeDrawer(ctx);
+      drawer(landmarks, { color: '#2F5D50', accent: '#7BA88F' });
+      drawBoundaryBox(ctx, { status: frame.boundaryStatus === 'inside' ? 'inside' : 'outside' });
+      drawPrimaryAngleOverlay(ctx, landmarks, frame.jointAngles || {});
+    }
+    updateTable(frame.jointAngles || {});
+    const total = sequence.frames.length;
+    const phase = frame.phase || 'preview';
+    updateScore(null, `Preview rep ${(S.dataset.previewRowIndex ?? 0) + 1} · ${phase} · ${index + 1}/${total}`);
+    return true;
+  }
+
+  function stepDatasetPreview(now) {
+    const sequence = S.dataset.previewSequence;
+    const step = stepClipPlaybackState(S.dataset, sequence, now);
+    if (!step.active) return;
+    drawDatasetPreviewFrame(sequence, step.index);
+    if (step.done) {
+      stopDatasetPreview({ rerender: true });
+      return;
+    }
+    S.dataset.previewRaf = requestAnimationFrame(stepDatasetPreview);
   }
 
   function previewDatasetRep(index) {
     const row = S.dataset.rows?.[index];
-    const frame = row?.frames?.[0];
-    const landmarks = datasetFrameLandmarks(frame);
-    if (!frame || !landmarks.length || !R.canvas) {
+    const sequence = buildDatasetPreviewSequence(row);
+    if (!sequence || !R.canvas) {
       toast(getLang() === 'th' ? 'ไม่มี frame ให้ preview' : 'No dataset frame to preview.');
       return;
     }
-    const ctx = R.canvas.getContext('2d');
-    ctx.clearRect(0, 0, R.canvas.width, R.canvas.height);
-    drawer ||= makeDrawer(ctx);
-    drawer(landmarks, { color: '#2F5D50', accent: '#7BA88F' });
-    drawBoundaryBox(ctx, { status: frame.boundaryStatus === 'inside' ? 'inside' : 'outside' });
-    drawPrimaryAngleOverlay(ctx, landmarks, frame.angles || {});
-    updateTable(frame.angles || {});
-    updateScore(null, getLang() === 'th' ? `Preview rep ${index + 1}` : `Preview rep ${index + 1}`);
+    stopClipPlayback();
+    stopDatasetPreview();
+    S.dataset.previewRowIndex = index;
+    S.dataset.previewSequence = sequence;
+    S.dataset.previewFrameIdx = 0;
+    drawDatasetPreviewFrame(sequence, 0);
+    if (sequence.frames.length > 1 && startClipPlaybackState(S.dataset, sequence)) {
+      renderPanel();
+      drawDatasetPreviewFrame(sequence, 0);
+      S.dataset.previewRaf = requestAnimationFrame(stepDatasetPreview);
+    }
   }
 
   function skipDatasetRep(index) {
@@ -701,6 +740,7 @@ export function mountTherapistCapture() {
     } catch (e) { toast(t('cameraDenied')); }
   }
   function stopCam() {
+    stopDatasetPreview({ clearSequence: true });
     if (S.recording) {
       S.recording = null;
       updateRecordButton();
@@ -729,6 +769,7 @@ export function mountTherapistCapture() {
 
   async function renderResult(res) {
     if (activePendingSequence()) return;
+    if (S.dataset.previewPlaying) return;
     if (renderingLiveFrame) return;
     renderingLiveFrame = true;
     try {
@@ -891,6 +932,7 @@ export function mountTherapistCapture() {
   // ── Actions ─────────────────────────────────────────────────
   function setCaptureWorkflow(workflow) {
     S.captureWorkflow = ['reference', 'dataset', 'validate'].includes(workflow) ? workflow : 'reference';
+    if (S.captureWorkflow !== 'dataset') stopDatasetPreview({ clearSequence: true });
     setMode(S.captureWorkflow === 'validate' ? 'validate' : 'setup');
     renderPanel();
   }

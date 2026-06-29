@@ -38,6 +38,12 @@ export function createTherapistCaptureState({ exerciseId, variant } = {}) {
       rows: [],
       reviewOpen: false,
       recorder: null,
+      previewRowIndex: null,
+      previewSequence: null,
+      previewFrameIdx: null,
+      previewPlaying: false,
+      previewLastAt: 0,
+      previewRaf: 0,
     },
     aiReadiness: {
       schemaId: null,

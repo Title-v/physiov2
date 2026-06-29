@@ -51,6 +51,7 @@ export const DEFAULT_HOLD_THRESHOLDS = Object.freeze({
 
 export const DEFAULT_AI_FUSION_THRESHOLDS = Object.freeze({
   enabled: true,
+  repCounting: 'primary',
   minConfidence: 0.75,
   minFrameRatio: 0.3,
   primaryWeight: 0.85,
@@ -387,7 +388,8 @@ function assessAiSignal(aiSignal, thresholds) {
   if (!thresholds.enabled || !aiSignal) return null;
   const confidence = Number(aiSignal.confidence);
   if (!Number.isFinite(confidence) || confidence < thresholds.minConfidence) return null;
-  const quality = thresholds.qualityScores[aiSignal.quality] != null ? aiSignal.quality : 'good';
+  if (thresholds.qualityScores[aiSignal.quality] == null) return null;
+  const quality = aiSignal.quality;
   const qualityScore = scoreClamp(thresholds.qualityScores[quality]);
   return {
     phase: aiSignal.phase || null,
@@ -466,6 +468,8 @@ export function createMotionQualityEngine({
   let lastFrameAt = null;
   let holdFrames = [];
   let holdStartedAt = null;
+  let aiRepFrames = [];
+  let aiRepSummaries = [];
 
   function angleDataFromInput(input) {
     if (input?.jointAngles) return { jointAngles: input.jointAngles, angleMeta: input.angleMeta || null };
@@ -489,9 +493,13 @@ export function createMotionQualityEngine({
     return { id: 'good', tone: 'good', text: lang === 'th' ? 'ดี ทำต่อได้' : 'Good, keep going' };
   }
 
-  function summarizeCurrentRep(endTime) {
-    const frames = currentRepFrames;
-    const durationMs = Math.max(1, endTime - (repStartedAt ?? endTime));
+  function summarizeRepFrames(frames, {
+    durationMs = 1,
+    side = null,
+    source = 'rule',
+    index = repSummaries.length + 1,
+    aiPhaseRep = null,
+  } = {}) {
     const avg = (key) => scoreClamp(mean(frames.map((frame) => frame[key])) ?? 0);
     const boundaryInsideRatio = frames.length ? frames.filter((frame) => frame.boundaryInside).length / frames.length : 0;
     const visibleJointRatio = mean(frames.map((frame) => frame.visibleJointRatio)) ?? 0;
@@ -513,9 +521,10 @@ export function createMotionQualityEngine({
     );
     const overallScore = fuseAiPrimaryScore(ruleOverallScore, aiSummary, aiThresholds);
     const reasons = [];
-    if (targetReachScore < motionThresholds.targetPct) reasons.push('incomplete_target');
-    if (pathScore < motionThresholds.validScore) reasons.push('wrong_path');
-    if (overallScore < motionThresholds.validScore) reasons.push('low_pose_score');
+    const useAiPrimaryReasons = source === 'ai_primary' && aiSummary.scoreable;
+    if (!useAiPrimaryReasons && targetReachScore < motionThresholds.targetPct) reasons.push('incomplete_target');
+    if (!useAiPrimaryReasons && pathScore < motionThresholds.validScore) reasons.push('wrong_path');
+    if (overallScore < motionThresholds.validScore) reasons.push(useAiPrimaryReasons ? 'low_ai_score' : 'low_pose_score');
     if (boundaryInsideRatio < motionThresholds.boundaryInsideRatio) reasons.push('out_of_frame');
     if (visibleJointRatio < motionThresholds.visibleJointRatio) reasons.push('low_visibility');
     if (durationMs < motionThresholds.minRepMs) reasons.push('too_fast');
@@ -523,9 +532,11 @@ export function createMotionQualityEngine({
     if (aiSummary.reason) reasons.push(aiSummary.reason);
     const valid = !reasons.length;
     return {
-      index: repSummaries.length + 1,
+      index,
       valid,
       reasons,
+      repSource: source,
+      aiPhaseRep,
       overallScore,
       ruleOverallScore,
       poseScore,
@@ -538,11 +549,45 @@ export function createMotionQualityEngine({
       aiSignalCounts: aiSummary.counts,
       aiReasonRatio: aiSummary.reasonRatio,
       durationMs,
-      side: activeSide,
+      side,
       boundaryInsideRatio: Math.round(boundaryInsideRatio * 1000) / 1000,
       visibleJointRatio: Math.round(visibleJointRatio * 1000) / 1000,
       frameCount: frames.length,
     };
+  }
+
+  function summarizeCurrentRep(endTime) {
+    const durationMs = Math.max(1, endTime - (repStartedAt ?? endTime));
+    return summarizeRepFrames(currentRepFrames, {
+      durationMs,
+      side: activeSide,
+      source: 'rule',
+      index: repSummaries.length + 1,
+    });
+  }
+
+  function commitAiCompletedRep(completedRep) {
+    if (aiThresholds.repCounting !== 'primary' || !completedRep) return null;
+    const startedAt = Number(completedRep.startedAt);
+    const endedAt = Number(completedRep.endedAt ?? lastFrameAt ?? Date.now());
+    const repFrames = aiRepFrames.filter((frame) => (
+      (!Number.isFinite(startedAt) || frame.timestamp >= startedAt)
+      && (!Number.isFinite(endedAt) || frame.timestamp <= endedAt)
+    ));
+    const frames = repFrames.length ? repFrames : aiRepFrames.slice();
+    const durationMs = Math.max(1, Number.isFinite(startedAt) && Number.isFinite(endedAt)
+      ? endedAt - startedAt
+      : (frames.at(-1)?.timestamp ?? 1) - (frames[0]?.timestamp ?? 0));
+    const summary = summarizeRepFrames(frames, {
+      durationMs,
+      side: completedRep.side || null,
+      source: 'ai_primary',
+      index: aiRepSummaries.length + 1,
+      aiPhaseRep: { ...completedRep },
+    });
+    aiRepSummaries.push(summary);
+    if (Number.isFinite(endedAt)) aiRepFrames = aiRepFrames.filter((frame) => frame.timestamp > endedAt);
+    return summary;
   }
 
   function mergeCycleReps(first, second) {
@@ -633,6 +678,10 @@ export function createMotionQualityEngine({
       aiSignal,
       aiAssessment,
     };
+    if (aiAssessment) {
+      aiRepFrames.push(frameScore);
+      aiRepFrames = aiRepFrames.slice(-900);
+    }
 
     const atRest = progressPct <= motionThresholds.restPct;
     const leftRest = progressPct > motionThresholds.leaveRestPct;
@@ -676,7 +725,10 @@ export function createMotionQualityEngine({
       }
     }
 
-    const aggregate = aggregateReps(repSummaries, dose);
+    const aiCounterSnapshot = input?.aiRepSnapshot || input?.aiRepCounter || null;
+    const aiCompletedSummary = commitAiCompletedRep(aiCounterSnapshot?.completedRep || input?.aiCompletedRep || null);
+    const usesAiPrimarySummary = aiThresholds.repCounting === 'primary' && aiRepSummaries.length > 0;
+    const aggregate = aggregateReps(usesAiPrimarySummary ? aiRepSummaries : repSummaries, dose);
     const ruleCurrentScore = scoreClamp(
       poseScore * motionThresholds.weights.pose +
       pathScore * motionThresholds.weights.path +
@@ -722,7 +774,8 @@ export function createMotionQualityEngine({
       reps: aggregate.reps,
       validReps: aggregate.validReps,
       invalidRepCount: aggregate.invalidRepCount,
-      completedRep,
+      completedRep: aiCompletedSummary || completedRep,
+      scoreSource: usesAiPrimarySummary ? 'ai_primary' : 'rule',
       repSummaries: aggregate.repSummaries,
       cue: null,
     };
@@ -881,7 +934,18 @@ export function createMotionQualityEngine({
 
   function finishSummary() {
     if (kind === REFERENCE_KINDS.HOLD_POSE) return finishHoldSummary(lastFrameAt ?? Date.now());
-    return aggregateReps(repSummaries, dose);
+    const ruleSummary = aggregateReps(repSummaries, dose);
+    if (aiThresholds.repCounting === 'primary' && aiRepSummaries.length) {
+      return {
+        ...aggregateReps(aiRepSummaries, dose),
+        scoreSource: 'ai_primary',
+        ruleSummary,
+      };
+    }
+    return {
+      ...ruleSummary,
+      scoreSource: 'rule',
+    };
   }
 
   function reset() {
@@ -897,6 +961,8 @@ export function createMotionQualityEngine({
     lastFrameAt = null;
     holdFrames = [];
     holdStartedAt = null;
+    aiRepFrames = [];
+    aiRepSummaries = [];
   }
 
   return {

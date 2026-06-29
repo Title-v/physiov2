@@ -85,6 +85,7 @@ export function createPracticeFrameProcessor({
         angleMeta: prepared.angleMeta,
         boundary: prepared.boundary,
         aiSignal,
+        aiRepSnapshot,
       })
       : null;
     const nextSnapshot = snapshot && aiRepSnapshot

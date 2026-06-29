@@ -13,6 +13,7 @@ function parseArgs(argv) {
     out: 'training/features/motion-features.json',
     windowSize: 30,
     stride: 5,
+    validationRatio: 0.2,
     skipUnlabeled: false,
     dryRun: false,
   };
@@ -22,6 +23,7 @@ function parseArgs(argv) {
     else if (arg === '--out') args.out = argv[++i];
     else if (arg === '--window-size') args.windowSize = Number(argv[++i]);
     else if (arg === '--stride') args.stride = Number(argv[++i]);
+    else if (arg === '--validation-ratio') args.validationRatio = Number(argv[++i]);
     else if (arg === '--skip-unlabeled') args.skipUnlabeled = true;
     else if (arg === '--dry-run') args.dryRun = true;
     else if (arg === '--help' || arg === '-h') args.help = true;
@@ -43,6 +45,7 @@ export async function buildMotionFeatures(args) {
   const dataset = await loadTrainingDataset(args.input, {
     windowSize: args.windowSize,
     stride: args.stride,
+    validationRatio: args.validationRatio,
     skipUnlabeled: args.skipUnlabeled,
   });
   const payload = {
@@ -56,10 +59,13 @@ export async function buildMotionFeatures(args) {
     rows: dataset.rows.length,
     validRows: dataset.validRows.length,
     invalidRows: dataset.invalidRows.length,
+    split: dataset.split,
+    validationRatio: dataset.validationRatio,
     samples: dataset.samples.map((sample) => ({
       exerciseId: sample.row.exerciseId,
       phase: sample.phase,
       quality: sample.quality,
+      split: sample.split,
       window: sample.window,
       phaseOneHot: sample.phaseOneHot,
       qualityOneHot: sample.qualityOneHot,
@@ -72,6 +78,9 @@ export async function buildMotionFeatures(args) {
     validRows: payload.validRows,
     invalidRows: payload.invalidRows,
     samples: payload.samples.length,
+    trainSamples: dataset.trainSamples.length,
+    validationSamples: dataset.validationSamples.length,
+    split: dataset.split,
     inputShape: payload.inputShape,
     landmarkSchemaId: payload.landmarkSchemaId,
     dryRun: args.dryRun,

@@ -1,5 +1,5 @@
 import { idx } from './Landmarks.js';
-import { getBodyRegionLandmarkSchema } from './BodyRegionLandmarkSchema.js';
+import { getBodyRegionLandmarkSchema, resolveBodyRegionLandmarkSchema } from './BodyRegionLandmarkSchema.js';
 
 export const MOTION_SAFETY_STATUSES = Object.freeze({
   READY: 'ready',
@@ -104,7 +104,10 @@ export function evaluateMotionSafetyGate(landmarks, {
   boundaryBox = DEFAULT_BOX,
   minVisibility = null,
 } = {}) {
-  const schema = landmarkSchema || getBodyRegionLandmarkSchema(landmarkSchemaId || exercise);
+  const requestedSchemaId = landmarkSchemaId || exercise?.landmarkSchemaId || null;
+  const schema = landmarkSchema || (requestedSchemaId
+    ? resolveBodyRegionLandmarkSchema(requestedSchemaId, { fallback: false })
+    : getBodyRegionLandmarkSchema(exercise));
   if (!schema?.id) {
     const hint = hintFor(MOTION_SAFETY_STATUSES.MISSING_SCHEMA, {}, {});
     return {
@@ -113,7 +116,7 @@ export function evaluateMotionSafetyGate(landmarks, {
       scoreable: false,
       status: MOTION_SAFETY_STATUSES.MISSING_SCHEMA,
       dataQuality: MOTION_SAFETY_STATUSES.MISSING_SCHEMA,
-      schemaId: landmarkSchemaId || null,
+      schemaId: requestedSchemaId,
       primary: { names: [], visible: [], missing: [], lowVisibility: [], inside: [], outside: [], visibilityRatio: 0, insideRatio: 0 },
       stabilizer: { names: [], visible: [], missing: [], lowVisibility: [], inside: [], outside: [], visibilityRatio: 0, insideRatio: 0 },
       missingPrimary: [],

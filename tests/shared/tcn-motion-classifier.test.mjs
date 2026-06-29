@@ -26,6 +26,9 @@ test('normalizeAiSignal maps aliases and clamps confidence', () => {
     confidence: 0.75,
   });
   assert.equal(normalizeAiSignal({ phase: 'unknown' }), null);
+  assert.equal(normalizeAiSignal({ phase: 'target', quality: 'out_of_frame', confidence: 0.95 }), null);
+  assert.equal(normalizeAiSignal([2, 99, 0.95]), null);
+  assert.equal(normalizeAiSignal([[], []]), null);
 });
 
 test('createTcnMotionClassifier predicts using lazy registry and extracted vectors', async () => {
@@ -89,9 +92,11 @@ test('createTcnMotionClassifier supports TFJS-style two-head tensor outputs lazi
   const registry = createModelRegistry({
     models: {
       tcn: {
-        __physioAiManifest: { inputShape: [2, 9], approved: true },
+        __physioAiManifest: { inputShape: [2, 27], approved: true, landmarkSchemaId: 'right_arm.v1' },
         predict(input) {
           assert.equal(input.kind, 'tensor3d');
+          assert.equal(input.value[0].length, 2);
+          assert.equal(input.value[0][0].length, 27);
           return [
             { async data() { return [0.1, 0.7, 0.1, 0.1]; }, dispose() { disposed.push('phase'); } },
             { async data() { return [0.05, 0.05, 0.8, 0.05, 0.05]; }, dispose() { disposed.push('quality'); } },
@@ -133,13 +138,19 @@ test('createTcnMotionClassifier refuses unapproved or schema-mismatched manifest
   const registry = createModelRegistry({
     models: {
       unapproved: {
-        __physioAiManifest: { inputShape: [2, 9], approved: false, landmarkSchemaId: 'right_arm.v1' },
+        __physioAiManifest: { inputShape: [2, 27], approved: false, landmarkSchemaId: 'right_arm.v1' },
         predict() {
           return { phase: 'target', quality: 'good', confidence: 0.9 };
         },
       },
       wrongSchema: {
-        __physioAiManifest: { inputShape: [2, 9], approved: true, landmarkSchemaId: 'right_leg.v1' },
+        __physioAiManifest: { inputShape: [2, 27], approved: true, landmarkSchemaId: 'right_leg.v1' },
+        predict() {
+          return { phase: 'target', quality: 'good', confidence: 0.9 };
+        },
+      },
+      unknownSchema: {
+        __physioAiManifest: { inputShape: [2, 27], approved: true, landmarkSchemaId: 'made_up.v1' },
         predict() {
           return { phase: 'target', quality: 'good', confidence: 0.9 };
         },
@@ -153,4 +164,30 @@ test('createTcnMotionClassifier refuses unapproved or schema-mismatched manifest
 
   const wrongSchema = createTcnMotionClassifier({ registry, modelName: 'wrongSchema', logger });
   assert.equal(await wrongSchema.predict([{ t: 0 }], { landmarkSchemaId: 'right_arm.v1' }), null);
+
+  const unknownSchema = createTcnMotionClassifier({ registry, modelName: 'unknownSchema', logger });
+  assert.equal(await unknownSchema.predict([{ t: 0 }], { landmarkSchemaId: 'right_arm.v1' }), null);
+});
+
+test('createTcnMotionClassifier refuses manifest inputShape that does not match schema feature size', async () => {
+  let predictCalls = 0;
+  const registry = createModelRegistry({
+    models: {
+      badShape: {
+        __physioAiManifest: { inputShape: [2, 28], approved: true, landmarkSchemaId: 'right_arm.v1' },
+        predict() {
+          predictCalls += 1;
+          return { phase: 'target', quality: 'good', confidence: 0.9 };
+        },
+      },
+    },
+    logger: { warn() {} },
+  });
+  const classifier = createTcnMotionClassifier({ registry, modelName: 'badShape', logger: { warn() {} } });
+
+  assert.equal(await classifier.predict([
+    { t: 0, landmarks: [], jointAngles: {} },
+    { t: 100, landmarks: [], jointAngles: {} },
+  ], { landmarkSchemaId: 'right_arm.v1' }), null);
+  assert.equal(predictCalls, 0);
 });

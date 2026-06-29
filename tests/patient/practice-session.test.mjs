@@ -68,7 +68,8 @@ test('buildPracticeSessionPayload uses final summary scores and plan kind', () =
   assert.equal(payload.validReps, 9);
   assert.equal(payload.invalidRepCount, 1);
   assert.equal(payload.summary, summary);
-  assert.equal(payload.sessionVersion, 2);
+  assert.equal(payload.sessionVersion, 3);
+  assert.equal(payload.scoreSource, 'rule');
   assert.equal(payload.scoreBreakdown.overall, 88);
   assert.deepEqual(payload.invalidReasons, {});
 });
@@ -107,6 +108,33 @@ test('summaryMetrics matches patient summary screen values', () => {
   });
 });
 
+test('AI-primary session payload preserves score source and AI quality breakdown', () => {
+  const payload = buildPracticeSessionPayload({
+    exercise: { id: 'shoulder', title: 'Shoulder raise' },
+    planItems: [{ exerciseId: 'shoulder' }],
+    summary: {
+      scoreSource: 'ai_primary',
+      overallScore: 86,
+      avgScore: 86,
+      avgAiQualityScore: 94,
+      avgPoseScore: 20,
+      avgTargetReachScore: 0,
+      reps: 1,
+      validReps: 1,
+      invalidRepCount: 0,
+    },
+    endedAt: 123,
+  });
+  const metrics = summaryMetrics({ session: payload });
+
+  assert.equal(payload.sessionVersion, 3);
+  assert.equal(payload.scoreSource, 'ai_primary');
+  assert.equal(payload.scoreBreakdown.aiQuality, 94);
+  assert.equal(payload.scoreBreakdown.repQuality, null);
+  assert.equal(metrics.poseScore, 94);
+  assert.equal(metrics.motionScore, 94);
+});
+
 test('savePracticeSession posts versioned payload and merges server response', async () => {
   const session = await savePracticeSession({
     exercise: { id: 'shoulder', title: 'Shoulder raise' },
@@ -118,7 +146,7 @@ test('savePracticeSession posts versioned payload and merges server response', a
     endedAt: 1000,
     postSession: async (path, payload) => {
       assert.equal(path, '/sessions');
-      assert.equal(payload.sessionVersion, 2);
+      assert.equal(payload.sessionVersion, 3);
       assert.equal(payload.referenceVersion, 3);
       assert.equal(payload.scoreBreakdown.overall, 90);
       return { id: 'server-session', endedAt: '1970-01-01T00:00:02.000Z' };

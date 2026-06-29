@@ -76,7 +76,7 @@ function validAiModelPayload() {
     exerciseId: 'shoulder',
     version: 'v1',
     landmarkSchemaId: 'right_arm.v1',
-    inputShape: [30, 31],
+    inputShape: [30, 27],
     modelInputLandmarks: ['right_shoulder', 'right_elbow', 'right_wrist', 'left_shoulder', 'right_hip'],
     primaryRequiredLandmarks: ['right_shoulder', 'right_elbow', 'right_wrist'],
     stabilizerRequiredLandmarks: ['left_shoulder', 'right_hip'],
@@ -127,7 +127,7 @@ test('data payload validators accept the current patient/therapist API shapes', 
   assert.equal(validatePlanPayload({ items: [{ exerciseId: 'shoulder', reps: 8, sets: 2 }] }, 'patient-1').ok, true);
   assert.equal(validateReferencePayload({ exerciseId: 'shoulder', kind: 'motion_cycle', referenceSequence: { frames: [] } }).ok, true);
   assert.equal(validateDeleteReferencePayload({ query: { exerciseId: 'shoulder' } }).ok, true);
-  assert.equal(validateSessionPayload({ exerciseId: 'shoulder', endedAt: 1000, score: 88, summary: {} }).ok, true);
+  assert.equal(validateSessionPayload({ exerciseId: 'shoulder', endedAt: 1000, score: 88, scoreSource: 'ai_primary', summary: {} }).ok, true);
   assert.equal(validateDatasetPayload(validDatasetPayload()).ok, true);
   assert.equal(validateAiModelPayload(validAiModelPayload()).ok, true);
 });
@@ -139,10 +139,45 @@ test('data payload validators reject malformed payloads with field-specific issu
   assert.deepEqual(validateReferencePayload({ exerciseId: 'bad id' }).issues, ['exerciseId:invalid']);
   assert.deepEqual(validateDeleteReferencePayload({ body: { exerciseId: 'bad id' } }).issues, ['exerciseId:invalid']);
   assert.deepEqual(validateSessionPayload({ exerciseId: 'shoulder', summary: [] }).issues, ['summary:object_required']);
+  assert.deepEqual(validateSessionPayload({ exerciseId: 'shoulder', scoreSource: 'magic' }).issues, ['scoreSource:invalid']);
   assert.equal(validateDatasetPayload({ ...validDatasetPayload(), labelStatus: 'draft' }).issues.includes('labelStatus:reviewed_required'), true);
   assert.equal(validateDatasetPayload({ ...validDatasetPayload(), motionLabel: 'unlabeled' }).issues.includes('motionLabel:invalid'), true);
+  assert.equal(validateDatasetPayload({ ...validDatasetPayload(), landmarkSchemaId: 'made_up.v1' }).issues.includes('landmarkSchemaId:unknown'), true);
+  assert.equal(validateDatasetPayload({
+    ...validDatasetPayload(),
+    modelInputLandmarks: ['right_elbow', 'right_shoulder', 'right_wrist', 'left_shoulder', 'right_hip'],
+  }).issues.includes('modelInputLandmarks:schema_mismatch'), true);
   assert.equal(validateAiModelPayload({ ...validAiModelPayload(), inputShape: [0] }).issues.includes('inputShape:invalid'), true);
+  assert.equal(validateAiModelPayload({ ...validAiModelPayload(), inputShape: [30, 28] }).issues.includes('inputShape:schema_mismatch'), true);
+  assert.equal(validateAiModelPayload({ ...validAiModelPayload(), landmarkSchemaId: 'made_up.v1' }).issues.includes('landmarkSchemaId:unknown'), true);
+  assert.equal(validateAiModelPayload({
+    ...validAiModelPayload(),
+    jointNames: ['right_elbow', 'right_shoulder'],
+  }).issues.includes('jointNames:schema_mismatch'), true);
+  assert.equal(validateAiModelPayload({
+    ...validAiModelPayload(),
+    qualities: ['good', 'incomplete', 'wrong_path', 'unstable', 'out_of_frame'],
+  }).issues.includes('qualities:schema_mismatch'), true);
+  assert.equal(validateAiModelPayload({
+    ...validAiModelPayload(),
+    approved: true,
+    approval: { ok: true },
+    evaluation: {
+      phaseAccuracy: 0.9,
+      qualityAccuracy: 0.7,
+      perLabelRecall: { good: 0.9, incomplete: 0.9, wrong_path: 0.9, unstable: 0.9 },
+    },
+  }).issues.includes('approval:failed'), true);
   assert.equal(validateAiModelPayload({ ...validAiModelPayload(), approved: true }).issues.includes('approval:failed'), true);
+  assert.equal(validateAiModelPayload({
+    ...validAiModelPayload(),
+    approved: true,
+    evaluation: {
+      phaseAccuracy: 0.9,
+      qualityAccuracy: 0.86,
+      perLabelRecall: { good: 0.9, incomplete: 0.8, wrong_path: 0.75, unstable: 0.72 },
+    },
+  }).ok, true);
 });
 
 test('data handlers reject invalid create/link patient payloads before database writes', async () => {
