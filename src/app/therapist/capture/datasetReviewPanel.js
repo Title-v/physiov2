@@ -31,6 +31,11 @@ export function renderDatasetReviewPanel({
         h('div', { class: 'muted', style: { fontSize: '12px' } },
           `${row.frames?.length || 0} frames · schema ${row.landmarkSchemaId || 'missing'}`),
         h('div', { class: 'row gap6 wrap' },
+          h('button', {
+            class: 'mini',
+            disabled: row.frames?.length ? null : '',
+            onclick: () => actions.previewDatasetRep?.(index),
+          }, lang === 'th' ? 'เล่น' : 'Play'),
           ...LABELS.map(([value, en, th]) => h('button', {
             class: 'mini',
             disabled: rejected ? '' : null,

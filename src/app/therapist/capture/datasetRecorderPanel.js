@@ -27,6 +27,8 @@ export function renderDatasetRecorderPanel({
 }) {
   const readiness = S.aiReadiness || {};
   const ready = readiness.trainable === true;
+  const cameraReady = S.cameraOn === true;
+  const canStart = ready && cameraReady;
   const labelSelect = h('select', {
     style: { width: '100%' },
     onchange: (e) => actions.setDatasetLabelTarget(e.target.value),
@@ -42,7 +44,9 @@ export function renderDatasetRecorderPanel({
     style: { width: '90px', textAlign: 'right' },
     onchange: (e) => actions.setDatasetTargetReps(e.target.value),
   });
-  const statusText = ready
+  const statusText = !cameraReady
+    ? (lang === 'th' ? 'เปิดกล้องก่อนเก็บข้อมูลฝึก AI' : 'Start the camera before recording an AI dataset')
+    : ready
     ? (lang === 'th' ? 'พร้อมเก็บข้อมูลฝึก AI' : 'Ready to record AI dataset')
     : (lang === 'th' ? (readiness.hintTh || 'ยังไม่พร้อมเก็บข้อมูล') : (readiness.hint || 'Not trainable yet'));
 
@@ -63,7 +67,7 @@ export function renderDatasetRecorderPanel({
     h('div', { class: 'row gap6' },
       h('button', {
         class: 'btn ' + (S.dataset.active ? 'danger' : 'primary'),
-        disabled: (!S.dataset.active && !ready) ? '' : null,
+        disabled: (!S.dataset.active && !canStart) ? '' : null,
         style: { flex: '1' },
         onclick: S.dataset.active ? actions.stopDatasetRecording : actions.startDatasetRecording,
         html: icon(S.dataset.active ? 'close' : 'play', { size: 16, color: S.dataset.active ? '#FBFAF5' : '#FBFAF5' }) + ' ' +

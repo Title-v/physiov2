@@ -2,15 +2,42 @@ import { buildMotionDatasetRow } from './MotionDataset.js';
 import { evaluateMotionSafetyGate } from './MotionSafetyGate.js';
 import { normalizeMotionLabel } from './DatasetLabeler.js';
 
-function dataQualityFromFrames(frames) {
-  const safetyFrames = frames.map((frame) => frame.safety).filter(Boolean);
-  if (!safetyFrames.length) return 'no_pose';
-  const failed = safetyFrames.find((safety) => safety.dataQuality && safety.dataQuality !== 'usable');
-  return failed?.dataQuality || 'usable';
+export const DEFAULT_DATASET_REP_THRESHOLDS = Object.freeze({
+  minUsableFrameRatio: 0.9,
+  maxMissingFrameRatio: 0.1,
+});
+
+function qualityStatus(safety = {}) {
+  if (safety.dataQuality && safety.dataQuality !== 'ready') return safety.dataQuality;
+  if (safety.status && safety.status !== 'ready') return safety.status;
+  return 'usable';
 }
 
-function missingFromFrames(frames, key) {
-  return [...new Set(frames.flatMap((frame) => frame.safety?.[key] || []))];
+function mostCommon(values, fallback = 'usable') {
+  const counts = new Map();
+  for (const value of values.filter(Boolean)) counts.set(value, (counts.get(value) || 0) + 1);
+  return [...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] || fallback;
+}
+
+function dataQualityFromFrames(frames, { minUsableFrameRatio = DEFAULT_DATASET_REP_THRESHOLDS.minUsableFrameRatio } = {}) {
+  const safetyFrames = frames.map((frame) => frame.safety).filter(Boolean);
+  if (!safetyFrames.length) return 'no_pose';
+  const statuses = safetyFrames.map(qualityStatus);
+  const usable = statuses.filter((status) => status === 'usable' || status === 'ready').length;
+  if (usable / safetyFrames.length >= minUsableFrameRatio) return 'usable';
+  return mostCommon(statuses.filter((status) => status !== 'usable' && status !== 'ready'), 'no_pose');
+}
+
+function missingFromFrames(frames, key, { maxMissingFrameRatio = DEFAULT_DATASET_REP_THRESHOLDS.maxMissingFrameRatio } = {}) {
+  const safetyFrames = frames.map((frame) => frame.safety).filter(Boolean);
+  if (!safetyFrames.length) return [];
+  const counts = new Map();
+  for (const safety of safetyFrames) {
+    for (const name of safety?.[key] || []) counts.set(name, (counts.get(name) || 0) + 1);
+  }
+  return [...counts.entries()]
+    .filter(([, count]) => count / safetyFrames.length > maxMissingFrameRatio)
+    .map(([name]) => name);
 }
 
 export function createMotionDatasetRecorder({
@@ -20,6 +47,7 @@ export function createMotionDatasetRecorder({
   targetReps = 10,
   subjectId = 'anon_001',
   source = 'therapist_dataset',
+  thresholds = DEFAULT_DATASET_REP_THRESHOLDS,
   now = () => (globalThis.performance?.now ? globalThis.performance.now() : Date.now()),
 } = {}) {
   let active = false;
@@ -60,16 +88,17 @@ export function createMotionDatasetRecorder({
   function completeRep({ suggestedLabel = normalizedLabel, reviewed = false } = {}) {
     const repFrames = frames.slice();
     frames = [];
-    const dataQuality = dataQualityFromFrames(repFrames);
-    const missingPrimary = missingFromFrames(repFrames, 'missingPrimary');
-    const missingStabilizer = missingFromFrames(repFrames, 'missingStabilizer');
-    const trainable = dataQuality === 'usable' && reviewed && !!normalizedLabel && !missingPrimary.length && !missingStabilizer.length;
+    const dataQuality = dataQualityFromFrames(repFrames, thresholds);
+    const missingPrimary = missingFromFrames(repFrames, 'missingPrimary', thresholds);
+    const missingStabilizer = missingFromFrames(repFrames, 'missingStabilizer', thresholds);
+    const rejected = dataQuality !== 'usable' || missingPrimary.length > 0 || missingStabilizer.length > 0;
+    const trainable = !rejected && reviewed && !!normalizedLabel;
     const row = buildMotionDatasetRow({
       exerciseId: exercise.id,
-      label: reviewed ? normalizedLabel : 'unlabeled',
-      motionLabel: reviewed ? normalizedLabel : null,
+      label: trainable ? normalizedLabel : 'unlabeled',
+      motionLabel: trainable ? normalizedLabel : null,
       suggestedLabel,
-      labelStatus: reviewed ? 'reviewed' : (dataQuality === 'usable' ? 'draft' : 'auto_rejected'),
+      labelStatus: rejected ? 'auto_rejected' : (reviewed ? 'reviewed' : 'draft'),
       dataQuality,
       trainable,
       scoreable: trainable,
@@ -84,7 +113,7 @@ export function createMotionDatasetRecorder({
       frames: repFrames,
       source,
       subjectId,
-      metadata: { exerciseId: exercise.id, targetReps },
+      metadata: { exerciseId: exercise.id, targetReps, datasetThresholds: thresholds },
     });
     rows.push(row);
     return row;

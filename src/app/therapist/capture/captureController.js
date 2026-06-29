@@ -13,6 +13,7 @@ import { createMotionDatasetRecorder } from '../../../../shared/ai/MotionDataset
 import { isReviewedTrainableRow, reviewDatasetRow } from '../../../../shared/ai/DatasetLabeler.js';
 import { motionDatasetRowsToJsonl } from '../../../../shared/ai/MotionDataset.js';
 import { createTherapistCaptureState, resetValidationState } from './captureState.js';
+import { completedDatasetRepFromSnapshot, datasetPhaseFromSnapshot } from './datasetCapture.js';
 import {
   persistReferenceForCapture,
   saveHoldReferenceForCapture,
@@ -58,8 +59,8 @@ import {
   safeExportId,
   setSequenceMarkerFromPreviewIndex,
 } from './previewController.js';
-import { getValidationFrameProcessor } from './validationController.js';
-import { prepareLiveCaptureFrame } from './captureFrame.js';
+import { getValidationFrameProcessor, validationFeedbackText } from './validationController.js';
+import { prepareLiveCaptureFrameWithAi } from './captureFrame.js';
 import { renderCapturePanel } from './capturePanel.js';
 import { renderCaptureShell, renderCaptureTopbar } from './captureShell.js';
 
@@ -72,6 +73,7 @@ export function mountTherapistCapture() {
   });
   let R = {}; // dom refs
   let drawer = null;
+  let renderingLiveFrame = false;
   let authed = false; // gate: render() is a no-op until ensureTherapist() resolves (blocks cross-tab pre-auth paint)
 
   function loadRef() { S.reference = getReference(S.exId, S.patientId); }
@@ -388,7 +390,7 @@ export function mountTherapistCapture() {
       landmarks,
       jointAngles,
       boundary,
-      phase: snapshot?.phase || null,
+      phase: datasetPhaseFromSnapshot(snapshot),
       safety: {
         status: boundary?.readinessStatus,
         dataQuality: boundary?.dataQuality,
@@ -397,7 +399,7 @@ export function mountTherapistCapture() {
         missingStabilizer: S.aiReadiness.missingStabilizer,
       },
     });
-    if (snapshot?.completedRep) {
+    if (completedDatasetRepFromSnapshot(snapshot)) {
       recorder.completeRep({ reviewed: false, suggestedLabel: S.dataset.labelTarget });
       S.dataset.rows = recorder.rows;
       if (S.dataset.rows.length >= S.dataset.targetReps) {
@@ -419,6 +421,32 @@ export function mountTherapistCapture() {
     } catch {
       toast(getLang() === 'th' ? 'label ไม่ถูกต้อง' : 'Invalid label.');
     }
+  }
+
+  function datasetFrameLandmarks(frame = {}) {
+    return (frame.landmarks || [])
+      .map((point) => Array.isArray(point)
+        ? { x: point[0], y: point[1], z: point[2] || 0, visibility: point[3] ?? 0 }
+        : point)
+      .filter((point) => point && Number.isFinite(point.x) && Number.isFinite(point.y));
+  }
+
+  function previewDatasetRep(index) {
+    const row = S.dataset.rows?.[index];
+    const frame = row?.frames?.[0];
+    const landmarks = datasetFrameLandmarks(frame);
+    if (!frame || !landmarks.length || !R.canvas) {
+      toast(getLang() === 'th' ? 'ไม่มี frame ให้ preview' : 'No dataset frame to preview.');
+      return;
+    }
+    const ctx = R.canvas.getContext('2d');
+    ctx.clearRect(0, 0, R.canvas.width, R.canvas.height);
+    drawer ||= makeDrawer(ctx);
+    drawer(landmarks, { color: '#2F5D50', accent: '#7BA88F' });
+    drawBoundaryBox(ctx, { status: frame.boundaryStatus === 'inside' ? 'inside' : 'outside' });
+    drawPrimaryAngleOverlay(ctx, landmarks, frame.angles || {});
+    updateTable(frame.angles || {});
+    updateScore(null, getLang() === 'th' ? `Preview rep ${index + 1}` : `Preview rep ${index + 1}`);
   }
 
   function skipDatasetRep(index) {
@@ -636,6 +664,7 @@ export function mountTherapistCapture() {
         setDatasetTargetReps,
         startDatasetRecording,
         stopDatasetRecording,
+        previewDatasetRep,
         reviewDatasetRep,
         skipDatasetRep,
         toggleDatasetReview,
@@ -691,50 +720,58 @@ export function mountTherapistCapture() {
       const t0 = performance.now();
       const res = engine.detectVideo(R.video, performance.now());
       S.latency = Math.round(performance.now() - t0);
-      renderResult(res);
+      renderResult(res).catch((error) => {
+        console.warn('Capture render failed', error);
+      });
     }
     requestAnimationFrame(loop);
   }
 
-  function renderResult(res) {
+  async function renderResult(res) {
     if (activePendingSequence()) return;
-    const ctx = R.canvas.getContext('2d');
-    ctx.clearRect(0, 0, R.canvas.width, R.canvas.height);
-    const frame = prepareLiveCaptureFrame({
-      rawLandmarks: res?.landmarks?.[0] || null,
-      landmarkFilter: S.landmarkFilter,
-      exercise: getExercise(S.exId),
-      reference: S.reference,
-      mode: S.mode,
-      previousBoundaryFrame: S.boundaryFrame,
-      currentBoundary,
-      validationProcessorFor,
-      now: () => performance.now(),
-    });
-    if (!frame.hasPose) {
+    if (renderingLiveFrame) return;
+    renderingLiveFrame = true;
+    try {
+      const ctx = R.canvas.getContext('2d');
+      ctx.clearRect(0, 0, R.canvas.width, R.canvas.height);
+      const frame = await prepareLiveCaptureFrameWithAi({
+        rawLandmarks: res?.landmarks?.[0] || null,
+        landmarkFilter: S.landmarkFilter,
+        exercise: getExercise(S.exId),
+        reference: S.reference,
+        mode: S.mode,
+        previousBoundaryFrame: S.boundaryFrame,
+        currentBoundary,
+        validationProcessorFor,
+        now: () => performance.now(),
+      });
+      if (!frame.hasPose) {
+        drawBoundaryBox(ctx, frame.boundary);
+        updateBoundaryUi(frame.boundary, t('noPose'));
+        updateTable(null); updateScore(null); return;
+      }
+      updateBoundaryUi(frame.boundary, `${frame.live.length} pts`);
+      if (frame.snapshot) {
+        if (frame.ghostLandmarks) drawer(frame.ghostLandmarks, { ghost: true });
+        updateScore(frame.snapshot.overallScore, validationFeedbackText(frame.snapshot, frame.snapshot.cue?.text, { lang: getLang() }));
+      } else if (frame.validationUnavailable) {
+        updateScore(null, currentCaptureHint(getExercise(S.exId)));
+      } else updateScore(null);
+      drawer(frame.live, { color: frame.colors[0], accent: frame.colors[1] });
       drawBoundaryBox(ctx, frame.boundary);
-      updateBoundaryUi(frame.boundary, t('noPose'));
-      updateTable(null); updateScore(null); return;
+      drawPrimaryAngleOverlay(ctx, frame.live, frame.liveAngles);
+      updateTable(frame.liveAngles);
+      maybeRecordSequenceFrame({ landmarks: frame.live, jointAngles: frame.liveAngles, boundary: frame.boundary, now: performance.now() });
+      maybeRecordDatasetFrame({
+        landmarks: frame.live,
+        jointAngles: frame.liveAngles,
+        boundary: frame.boundary,
+        snapshot: frame.snapshot,
+        now: performance.now(),
+      });
+    } finally {
+      renderingLiveFrame = false;
     }
-    updateBoundaryUi(frame.boundary, `${frame.live.length} pts`);
-    if (frame.snapshot) {
-      if (frame.ghostLandmarks) drawer(frame.ghostLandmarks, { ghost: true });
-      updateScore(frame.snapshot.overallScore, frame.snapshot.cue?.text);
-    } else if (frame.validationUnavailable) {
-      updateScore(null, currentCaptureHint(getExercise(S.exId)));
-    } else updateScore(null);
-    drawer(frame.live, { color: frame.colors[0], accent: frame.colors[1] });
-    drawBoundaryBox(ctx, frame.boundary);
-    drawPrimaryAngleOverlay(ctx, frame.live, frame.liveAngles);
-    updateTable(frame.liveAngles);
-    maybeRecordSequenceFrame({ landmarks: frame.live, jointAngles: frame.liveAngles, boundary: frame.boundary, now: performance.now() });
-    maybeRecordDatasetFrame({
-      landmarks: frame.live,
-      jointAngles: frame.liveAngles,
-      boundary: frame.boundary,
-      snapshot: frame.snapshot,
-      now: performance.now(),
-    });
   }
 
   function drawPrimaryAngleOverlay(ctx, landmarks, liveAngles) {

@@ -72,3 +72,72 @@ test('motion dataset recorder stores safety metadata and creates draft rows for 
   assert.deepEqual(row.primaryRequiredLandmarks, rightArmExercise.primaryRequiredLandmarks);
   assert.equal(row.frames.length, 1);
 });
+
+test('motion dataset recorder tolerates brief landmark flicker within threshold', () => {
+  const recorder = createMotionDatasetRecorder({
+    exercise: rightArmExercise,
+    landmarkSchemaId: 'right_arm.v1',
+    labelTarget: 'good',
+  });
+
+  recorder.start();
+  for (let i = 0; i < 10; i += 1) {
+    recorder.pushFrame({
+      landmarks: makeBasePose(),
+      safety: i === 4
+        ? {
+          dataQuality: 'low_visibility',
+          schemaId: 'right_arm.v1',
+          missingPrimary: ['right_elbow'],
+          missingStabilizer: [],
+        }
+        : {
+          dataQuality: 'usable',
+          schemaId: 'right_arm.v1',
+          missingPrimary: [],
+          missingStabilizer: [],
+        },
+    });
+  }
+  const row = recorder.completeRep({ reviewed: true });
+
+  assert.equal(row.dataQuality, 'usable');
+  assert.deepEqual(row.missingPrimary, []);
+  assert.equal(row.labelStatus, 'reviewed');
+  assert.equal(row.trainable, true);
+});
+
+test('motion dataset recorder rejects reps when missing stabilizer exceeds threshold', () => {
+  const recorder = createMotionDatasetRecorder({
+    exercise: rightArmExercise,
+    landmarkSchemaId: 'right_arm.v1',
+    labelTarget: 'good',
+  });
+
+  recorder.start();
+  for (let i = 0; i < 10; i += 1) {
+    recorder.pushFrame({
+      landmarks: makeBasePose(),
+      safety: i < 2
+        ? {
+          dataQuality: 'missing_stabilizer_required',
+          schemaId: 'right_arm.v1',
+          missingPrimary: [],
+          missingStabilizer: ['left_shoulder'],
+        }
+        : {
+          dataQuality: 'usable',
+          schemaId: 'right_arm.v1',
+          missingPrimary: [],
+          missingStabilizer: [],
+        },
+    });
+  }
+  const row = recorder.completeRep({ reviewed: true });
+
+  assert.equal(row.dataQuality, 'missing_stabilizer_required');
+  assert.deepEqual(row.missingStabilizer, ['left_shoulder']);
+  assert.equal(row.labelStatus, 'auto_rejected');
+  assert.equal(row.motionLabel, null);
+  assert.equal(row.trainable, false);
+});

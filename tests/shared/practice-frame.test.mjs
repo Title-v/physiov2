@@ -176,6 +176,49 @@ test('async practice frame processor can feed classifier signal into motion scor
   assert.equal(summary.invalidReasons.ai_wrong_path, 1);
 });
 
+test('async practice frame processor exposes AI phase rep counter snapshots', async () => {
+  const exercise = elbowExercise();
+  const reference = elbowReference();
+  const engine = createMotionQualityEngine({
+    exercise,
+    reference,
+    dose: { reps: 1, sets: 1 },
+    thresholds: { holdTargetMs: 40, holdRestMs: 40, minRepMs: 200 },
+  });
+  const processor = createPracticeFrameProcessor({
+    exercise,
+    reference,
+    motionEngine: engine,
+  });
+  let result = null;
+  const sequence = [
+    [0, 30, 'rest'],
+    [120, 30, 'rest'],
+    [240, 55, 'moving_to_target'],
+    [360, 90, 'target'],
+    [480, 110, 'target'],
+    [600, 110, 'target'],
+    [720, 80, 'returning'],
+    [840, 45, 'rest'],
+    [960, 30, 'rest'],
+    [1080, 30, 'rest'],
+  ];
+  for (const [timestamp, angle, phase] of sequence) {
+    result = await processor.processPracticeFrameWithAi({
+      landmarks: makeElbowPose(angle),
+      liveAngles: { left_elbow: angle },
+      boundary: inside,
+      timestamp,
+      aiSignal: { phase, quality: 'good', confidence: 0.94 },
+    });
+  }
+
+  assert.equal(result.snapshot.aiRepCount, 1);
+  assert.equal(result.snapshot.aiCompletedRep.index, 1);
+  assert.equal(result.snapshot.aiCompletedRep.quality, 'good');
+  assert.equal(result.snapshot.aiRepCounter.currentPhase, 'rest');
+});
+
 test('hold reference produces hold snapshot through shared processor', () => {
   const exercise = { id: 'balance', type: 'hold', primaryJoint: 'right_knee', holdSec: 1 };
   const reference = {

@@ -62,6 +62,7 @@ export function renderCapturePanel({
     setDatasetTargetReps,
     startDatasetRecording,
     stopDatasetRecording,
+    previewDatasetRep,
     reviewDatasetRep,
     skipDatasetRep,
     toggleDatasetReview,
@@ -309,6 +310,7 @@ export function renderCapturePanel({
     lang,
     actions: {
       reviewDatasetRep,
+      previewDatasetRep,
       skipDatasetRep,
       toggleDatasetReview,
     },

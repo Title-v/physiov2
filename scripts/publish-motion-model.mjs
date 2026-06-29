@@ -9,6 +9,7 @@ function parseArgs(argv) {
   const args = {
     model: null,
     out: 'shared/models/motion-tcn',
+    evaluation: null,
     approve: false,
     version: null,
     dryRun: false,
@@ -17,6 +18,7 @@ function parseArgs(argv) {
     const arg = argv[i];
     if (arg === '--model') args.model = argv[++i];
     else if (arg === '--out') args.out = argv[++i];
+    else if (arg === '--evaluation') args.evaluation = argv[++i];
     else if (arg === '--version') args.version = argv[++i];
     else if (arg === '--approve') args.approve = true;
     else if (arg === '--dry-run') args.dryRun = true;
@@ -31,6 +33,7 @@ function usage() {
     'Usage: node scripts/publish-motion-model.mjs --model path/to/tfjs-model --out shared/models/motion-tcn',
     '',
     'The source model directory must contain model.json and manifest.json with landmarkSchemaId.',
+    'Pass --evaluation training/artifacts/evaluation.json before --approve to enforce approval criteria.',
   ].join('\n');
 }
 
@@ -43,16 +46,24 @@ async function readManifest(modelDir) {
   return manifest;
 }
 
+async function readEvaluation(filePath) {
+  if (!filePath) return null;
+  const payload = JSON.parse(await readFile(filePath, 'utf8'));
+  return payload.evaluation || payload.metrics || payload;
+}
+
 export async function publishMotionModel(args) {
   if (!args.model) throw new Error('Missing --model path/to/tfjs-model');
   const manifest = await readManifest(args.model);
-  const approval = manifest.approval || evaluateModelApproval({ evaluation: manifest.evaluation || manifest.accuracy || {} });
+  const evaluation = await readEvaluation(args.evaluation) || manifest.evaluation || manifest.accuracy || null;
+  const approval = manifest.approval || evaluateModelApproval({ evaluation: evaluation || {} });
   if (args.approve && approval.ok !== true) {
     throw new Error(`Cannot approve model: ${(approval.issues || ['approval_failed']).join(', ')}`);
   }
   const publishedManifest = {
     ...manifest,
     version: args.version || manifest.version,
+    evaluation,
     approved: args.approve ? true : manifest.approved === true,
     approval,
     publishedAt: new Date().toISOString(),

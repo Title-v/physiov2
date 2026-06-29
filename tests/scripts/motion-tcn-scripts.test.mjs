@@ -180,6 +180,19 @@ test('build-motion-features and publish-motion-model preserve schema metadata', 
     format: 'layers-model',
     weightsManifest: [{ paths: ['weights.bin'], weights: [] }],
   }));
+  const evaluationPath = path.join(dir, 'evaluation.json');
+  await writeFile(evaluationPath, JSON.stringify({
+    evaluation: {
+      phaseAccuracy: 0.91,
+      qualityAccuracy: 0.86,
+      perLabelRecall: {
+        good: 0.91,
+        incomplete: 0.82,
+        wrong_path: 0.78,
+        unstable: 0.74,
+      },
+    },
+  }));
   await writeFile(path.join(modelDir, 'manifest.json'), JSON.stringify({
     name: 'motion-tcn',
     version: 'local-test',
@@ -188,12 +201,12 @@ test('build-motion-features and publish-motion-model preserve schema metadata', 
     inputShape: [4, features.inputShape[1]],
     phases: features.phases,
     qualities: features.qualities,
-    approval: { ok: true, issues: [] },
   }));
 
   const published = await runNode([
     'scripts/publish-motion-model.mjs',
     '--model', modelDir,
+    '--evaluation', evaluationPath,
     '--out', path.join(dir, 'published'),
     '--approve',
     '--dry-run',

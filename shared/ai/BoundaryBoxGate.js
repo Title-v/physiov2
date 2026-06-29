@@ -11,8 +11,8 @@ export const BOUNDARY_BOX_RATIO = 0.95;
 
 const VIS_OK = 0.35;
 
-const CORE = ['left_shoulder', 'right_shoulder', 'left_hip', 'right_hip'];
-const DISTAL = ['left_wrist', 'right_wrist', 'left_ankle', 'right_ankle'];
+// Legacy region maps are retained only as a fallback for old exercises that do
+// not resolve to a body-region landmark schema.
 const REGION_KEYS = {
   upper: ['left_shoulder', 'right_shoulder', 'left_elbow', 'right_elbow', 'left_wrist', 'right_wrist'],
   lower: ['left_hip', 'right_hip', 'left_knee', 'right_knee', 'left_ankle', 'right_ankle'],
@@ -30,34 +30,6 @@ const REGION_KEYS = {
     'left_ankle', 'right_ankle',
   ],
 };
-const REGION_CORE = {
-  upper: ['left_shoulder', 'right_shoulder'],
-  lower: ['left_hip', 'right_hip'],
-  shoulder: ['left_shoulder', 'right_shoulder'],
-  left_arm: ['left_shoulder'],
-  right_arm: ['right_shoulder'],
-  left_leg: ['left_hip'],
-  right_leg: ['right_hip'],
-  full: CORE,
-};
-const REGION_DISTAL = {
-  upper: ['left_wrist', 'right_wrist'],
-  lower: ['left_ankle', 'right_ankle'],
-  shoulder: ['left_elbow', 'right_elbow'],
-  left_arm: ['left_wrist'],
-  right_arm: ['right_wrist'],
-  left_leg: ['left_ankle'],
-  right_leg: ['right_ankle'],
-  full: DISTAL,
-};
-const FULL_BODY = [
-  'left_shoulder', 'right_shoulder',
-  'left_elbow', 'right_elbow',
-  'left_wrist', 'right_wrist',
-  'left_hip', 'right_hip',
-  'left_knee', 'right_knee',
-  'left_ankle', 'right_ankle',
-];
 const NEIGHBORS = {
   left_elbow: ['left_shoulder', 'left_wrist'],
   right_elbow: ['right_shoulder', 'right_wrist'],
@@ -118,12 +90,12 @@ export function getBoundaryBox(ratio = BOUNDARY_BOX_RATIO) {
 
 export function boundaryKeyJoints(exercise) {
   const metadata = exerciseMetadata(exercise || {});
-  if (Array.isArray(metadata.requiredJoints) && metadata.requiredJoints.length) {
-    return [...new Set(metadata.requiredJoints.filter(Boolean))];
-  }
   const schema = getBodyRegionLandmarkSchema(metadata);
   if (schema?.modelInputLandmarks?.length) {
     return [...schema.modelInputLandmarks];
+  }
+  if (Array.isArray(metadata.requiredJoints) && metadata.requiredJoints.length) {
+    return [...new Set(metadata.requiredJoints.filter(Boolean))];
   }
   const region = bodyRegion(exercise);
   const primary = exercise?.primaryJoint;
