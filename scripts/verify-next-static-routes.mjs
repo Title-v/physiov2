@@ -65,9 +65,10 @@ await workspaceContentIncludes('native Therapist home links to native plan build
 await workspaceContentIncludes('native Therapist home links to native dashboard', ['src', 'app', 'therapist', 'TherapistHomeClient.jsx'], '/therapist/dashboard');
 await workspaceContentIncludes('native therapist default page uses capture client', ['src', 'app', 'therapist', 'page.jsx'], 'TherapistCaptureClient');
 await workspaceContentIncludes('native capture page uses capture client', ['src', 'app', 'therapist', 'capture', 'page.jsx'], 'TherapistCaptureClient');
-await workspaceContentIncludes('native capture controller keeps motion validation path', ['src', 'app', 'therapist', 'capture', 'captureController.js'], 'createPracticeFrameProcessor');
+await workspaceContentIncludes('native capture controller delegates motion validation path', ['src', 'app', 'therapist', 'capture', 'captureController.js'], 'getValidationFrameProcessor');
+await workspaceContentIncludes('native capture validation controller keeps shared frame processor', ['src', 'app', 'therapist', 'capture', 'validationController.js'], 'createPracticeFrameProcessor');
 await workspaceContentIncludes('native capture controller keeps boundary gate', ['src', 'app', 'therapist', 'capture', 'captureController.js'], 'evaluateBoundaryBox');
-await workspaceContentIncludes('native capture controller keeps trajectory builders', ['src', 'app', 'therapist', 'capture', 'captureController.js'], 'buildReferenceTrajectory');
+await workspaceContentIncludes('native capture reference saver keeps trajectory builders', ['src', 'app', 'therapist', 'capture', 'referenceSaver.js'], 'buildReferenceTrajectory');
 await workspaceContentIncludes('native plan page uses plan client', ['src', 'app', 'therapist', 'plan', 'page.jsx'], 'TherapistPlanClient');
 await workspaceContentIncludes('native plan client keeps full plan save path', ['src', 'app', 'therapist', 'plan', 'TherapistPlanClient.jsx'], 'savePlanFull(patientId, plan)');
 await workspaceContentIncludes('native record page uses record client', ['src', 'app', 'therapist', 'record', 'page.jsx'], 'TherapistRecordClient');
@@ -89,7 +90,12 @@ check('legacy Therapist dashboard rewrites to native dashboard', rewriteMap.get(
 
 await contentIncludes('public patient index uses absolute app module', ['patient', 'index.html'], '/patient/app.js');
 await contentIncludes('public patient index uses absolute stylesheet', ['patient', 'index.html'], '/patient/styles.css');
-await contentIncludes('public patient app module exists', ['patient', 'app.js'], 'drawAngleOverlayForJoints');
+await contentIncludes('public patient app module exists', ['patient', 'app.js'], 'createPatientPracticeRuntime');
+await contentIncludes('public patient practice runtime module exists', ['patient', 'practiceRuntime.js'], 'drawAngleOverlayForJoints');
+await contentIncludes('public patient session sync module exists', ['patient', 'sessionSync.js'], 'buildPracticeSessionPayload');
+await contentIncludes('public patient api module exists', ['patient', 'patientApi.js'], 'createPatientAuthClient');
+await contentIncludes('public patient state module exists', ['patient', 'patientState.js'], 'createPatientAppState');
+await contentIncludes('public patient screens module exists', ['patient', 'patientScreens.js'], 'createPatientScreenRenderer');
 
 check('old public Therapist home is retired', !(await publicExists('therapist', 'index.html')));
 check('old public Therapist capture is retired', !(await publicExists('therapist', 'capture.html')));

@@ -27,6 +27,11 @@ const user = publicUser(
   null,
 );
 check('public user fallback', user.id === 'u1' && user.name === 'Meta Name' && user.role === 'patient');
+const spoofed = publicUser(
+  { id: 'u2', email: 'spoof@example.com', user_metadata: { name: 'Spoof', role: 'therapist' } },
+  null,
+);
+check('public user fallback does not trust metadata role', spoofed.role === 'patient');
 
 const plan = cleanPlan({ items: [{ exerciseId: 'shoulder' }], durationWeeks: 2 }, 'p1');
 check('clean plan defaults', plan.patientId === 'p1' && plan.durationDays === 14 && plan.daysPerWeek === 7);

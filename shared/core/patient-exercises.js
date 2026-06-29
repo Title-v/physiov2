@@ -1,4 +1,4 @@
-import { BODY_REGIONS, EXERCISES } from './exercises.js';
+import { BODY_REGIONS, EXERCISES, exerciseMetadata } from './exercises.js';
 import { idx } from '../ai/Landmarks.js';
 import { jointAngleCalculator } from '../ai/JointAngleCalculator.js';
 import { evaluateBoundaryBox } from '../ai/BoundaryBoxGate.js';
@@ -23,10 +23,12 @@ export function doseText(ex = {}) {
 }
 
 export function toPatientExercise(ex = {}) {
+  const metadata = exerciseMetadata(ex);
   const copy = PATIENT_EXERCISE_COPY[ex.id] || {};
   const region = regionById.get(ex.bodyRegion);
   return {
     ...ex,
+    ...metadata,
     title: copy.title || ex.labelTh || ex.label || ex.id,
     titleEn: copy.titleEn || ex.label || ex.id,
     desc: doseText(ex),
@@ -34,6 +36,8 @@ export function toPatientExercise(ex = {}) {
     score: Number(copy.score ?? 58),
     bodyRegionLabel: region?.labelTh || region?.label || ex.bodyRegion || 'ทั้งตัว',
     category: ex.category || 'exercise',
+    setupInstruction: metadata.setupInstructionTh || metadata.setupInstructionEn || '',
+    setupInstructionEn: metadata.setupInstructionEn || metadata.setupInstructionTh || '',
   };
 }
 
@@ -48,10 +52,12 @@ export function normalizePatientExercise(raw = {}, overrides = {}, catalog = PAT
   const sets = Number.isFinite(Number(overrides.sets)) ? Number(overrides.sets) : Number(raw?.sets ?? base.sets ?? 3);
   const holdSec = Number.isFinite(Number(overrides.holdSec)) ? Number(overrides.holdSec) : Number(raw?.holdSec ?? base.holdSec ?? 0);
   const bodyRegion = raw?.bodyRegion || base.bodyRegion || 'full';
+  const metadata = exerciseMetadata({ ...base, ...raw, bodyRegion });
   const region = regionById.get(bodyRegion);
   return {
     ...base,
     ...raw,
+    ...metadata,
     id: raw?.id || overrides.exerciseId || base.id,
     source,
     title,
@@ -64,6 +70,8 @@ export function normalizePatientExercise(raw = {}, overrides = {}, catalog = PAT
     bodyRegion,
     bodyRegionLabel: raw?.bodyRegionLabel || base.bodyRegionLabel || region?.labelTh || region?.label || bodyRegion,
     category: raw?.category || base.category || 'exercise',
+    setupInstruction: raw?.setupInstruction || metadata.setupInstructionTh || base.setupInstruction || '',
+    setupInstructionEn: raw?.setupInstructionEn || metadata.setupInstructionEn || base.setupInstructionEn || '',
     desc: holdSec > 0 && raw?.type === 'hold'
       ? `${holdSec}วิ ค้างไว้ · ${sets} เซ็ต`
       : `${reps} ครั้ง · ${sets} เซ็ต`,
@@ -141,6 +149,7 @@ export function overlayJointsForExercise(ex = {}) {
   if (Array.isArray(ex.repJoints) && ex.repJoints.length) return ex.repJoints.slice(0, 2);
   if (Array.isArray(ex.reference?.repJoints) && ex.reference.repJoints.length) return ex.reference.repJoints.slice(0, 2);
   if (Array.isArray(ex.reference?.scoringJoints) && ex.reference.scoringJoints.length) return ex.reference.scoringJoints.slice(0, 2);
+  if (Array.isArray(ex.requiredJoints) && ex.requiredJoints.length) return ex.requiredJoints.slice(0, 2);
   return [ex.dominantJoint || ex.primaryJoint || 'right_shoulder'];
 }
 

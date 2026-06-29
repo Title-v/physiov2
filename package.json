@@ -13,6 +13,8 @@
     "verify:static": "node scripts/verify-next-static-routes.mjs",
     "verify:motion": "node scripts/verify-motion-quality-engine.mjs",
     "verify:patient-live": "node scripts/verify-patient-live-practice.mjs",
+    "train:tcn": "node scripts/train-motion-tcn.mjs",
+    "convert:tcn": "node scripts/convert-motion-tcn-model.mjs",
     "supabase:login": "npx supabase login",
     "supabase:link": "npx supabase link --project-ref hptkdtzrhotmasznecwj",
     "supabase:push": "npx supabase db push --linked",

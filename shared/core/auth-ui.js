@@ -100,6 +100,12 @@ function showOverlay(resolve) {
       case 'invalid': return T ? 'อีเมลหรือรหัสผ่านไม่ถูกต้อง' : 'Wrong email or password';
       case 'exists': return T ? 'อีเมลนี้ถูกใช้แล้ว' : 'Email already registered';
       case 'not_therapist': return T ? 'บัญชีนี้ไม่ใช่นักกายภาพ' : 'This account is not a therapist';
+      case 'forbidden': return T
+        ? 'ปิดการสร้างบัญชีนักกายภาพไว้ ให้ผู้ดูแลสร้างบัญชีให้'
+        : 'Therapist self-registration is disabled. Ask an admin to create the account.';
+      case 'service_role_required': return T
+        ? 'ต้องตั้งค่า service role ก่อนสร้างบัญชีนักกายภาพ'
+        : 'Service role setup is required before creating therapist accounts.';
       case 'email_confirmation_required': return T
         ? 'ส่งอีเมลยืนยันแล้ว กรุณากดยืนยันในอีเมล แล้วกลับมาเข้าสู่ระบบ'
         : 'Verification email sent. Please verify your email, then sign in.';

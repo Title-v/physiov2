@@ -9,6 +9,19 @@ import {
 import { authEmailRedirectTo, targetPatientId } from './request.js';
 import { errorResult, jsonResult, noContentResult } from './result.js';
 import { createPatientAccess } from './patient-access.js';
+import {
+  validateCreatePatientPayload,
+  validateDeleteReferencePayload,
+  validatePatientLookupPayload,
+  validatePlanPayload,
+  validateReferencePayload,
+  validateSessionPayload,
+} from './payload-validation.js';
+
+function validationErrorResult(validation) {
+  const required = validation.issues?.some((item) => item.endsWith(':required'));
+  return errorResult(400, required ? 'required' : 'invalid_payload', validation.issues?.join(','));
+}
 
 export function createDataHandlers({
   supabaseReady,
@@ -74,9 +87,9 @@ export function createDataHandlers({
     const notTherapist = requireTherapist(req);
     if (notTherapist) return notTherapist;
 
-    const patientId = String(req.body?.patientId || '').trim();
-    const email = String(req.body?.email || '').trim().toLowerCase();
-    if (!patientId && !email) return errorResult(400, 'required');
+    const validation = validatePatientLookupPayload(req.body);
+    if (!validation.ok) return validationErrorResult(validation);
+    const { patientId, email } = validation.value;
     if (email && !SUPABASE_SERVICE_ROLE_KEY) return errorResult(500, 'service_role_required');
 
     const admin = serverDb(req);
@@ -117,10 +130,9 @@ export function createDataHandlers({
     const notTherapist = requireTherapist(req);
     if (notTherapist) return notTherapist;
 
-    const email = String(req.body?.email || '').trim().toLowerCase();
-    const password = String(req.body?.password || '');
-    const name = String(req.body?.name || '').trim();
-    if (!email || !password || !name) return errorResult(400, 'required');
+    const validation = validateCreatePatientPayload(req.body);
+    if (!validation.ok) return validationErrorResult(validation);
+    const { email, password, name } = validation.value;
 
     const admin = serverDb(req);
     try {
@@ -141,7 +153,7 @@ export function createDataHandlers({
           email,
           password,
           email_confirm: true,
-          user_metadata: { name, role: 'patient' },
+          user_metadata: { name },
         });
         if (created.error) return errorResult(400, normalizeAuthError(created.error), created.error.message);
 
@@ -157,7 +169,7 @@ export function createDataHandlers({
       const signed = await supabaseClient().auth.signUp({
         email,
         password,
-        options: { data: { name, role: 'patient' }, emailRedirectTo: authEmailRedirectTo(req) },
+        options: { data: { name }, emailRedirectTo: authEmailRedirectTo(req) },
       });
       if (signed.error) return errorResult(400, normalizeAuthError(signed.error), signed.error.message);
       const authUser = signed.data.user;
@@ -198,7 +210,9 @@ export function createDataHandlers({
     } catch (error) {
       return errorResult(500, 'supabase_error', error.message);
     }
-    const plan = cleanPlan(req.body, patientId);
+    const validation = validatePlanPayload(req.body, patientId);
+    if (!validation.ok) return validationErrorResult(validation);
+    const plan = cleanPlan(validation.value, patientId);
     const { data, error } = await req.auth.db
       .from(TABLES.plans)
       .upsert({
@@ -233,8 +247,9 @@ export function createDataHandlers({
     const notReady = requireSupabaseResult();
     if (notReady) return notReady;
     const patientId = targetPatientId(req);
-    const exerciseId = req.body?.exerciseId;
-    if (!exerciseId) return errorResult(400, 'required');
+    const validation = validateReferencePayload(req.body);
+    if (!validation.ok) return validationErrorResult(validation);
+    const { exerciseId } = validation.value;
     try {
       if (!(await canAccessPatient(req, patientId))) return errorResult(403, 'forbidden');
     } catch (error) {
@@ -259,8 +274,9 @@ export function createDataHandlers({
     const notReady = requireSupabaseResult();
     if (notReady) return notReady;
     const patientId = targetPatientId(req);
-    const exerciseId = req.query?.exerciseId || req.body?.exerciseId;
-    if (!exerciseId) return errorResult(400, 'required');
+    const validation = validateDeleteReferencePayload({ query: req.query, body: req.body });
+    if (!validation.ok) return validationErrorResult(validation);
+    const { exerciseId } = validation.value;
     try {
       if (!(await canAccessPatient(req, patientId))) return errorResult(403, 'forbidden');
     } catch (error) {
@@ -302,6 +318,8 @@ export function createDataHandlers({
     } catch (error) {
       return errorResult(500, 'supabase_error', error.message);
     }
+    const validation = validateSessionPayload(req.body);
+    if (!validation.ok) return validationErrorResult(validation);
     const endedAt = req.body?.endedAt || Date.now();
     const session = { ...req.body, patientId, endedAt };
     const id = req.body?.id || `s_${patientId}_${endedAt}`;

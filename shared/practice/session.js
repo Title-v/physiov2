@@ -1,7 +1,24 @@
+export const PRACTICE_SESSION_VERSION = 2;
+
+export function sessionScoreBreakdown(summary = {}) {
+  return {
+    overall: summary.overallScore ?? summary.avgScore ?? null,
+    pose: summary.avgPoseScore ?? summary.poseScore ?? null,
+    path: summary.avgPathScore ?? summary.pathScore ?? null,
+    targetReach: summary.avgTargetReachScore ?? summary.targetReachScore ?? null,
+    boundary: summary.avgBoundaryScore ?? summary.boundaryScore ?? null,
+    visibility: summary.avgVisibilityScore ?? summary.visibilityScore ?? null,
+    tempo: summary.avgTempoScore ?? summary.tempoScore ?? null,
+    stability: summary.avgStabilityScore ?? summary.stabilityScore ?? null,
+    duration: summary.durationScore ?? null,
+  };
+}
+
 export function buildPracticeSessionPayload({
   exercise = {},
   planItems = [],
   summary = {},
+  reference = null,
   endedAt = Date.now(),
 } = {}) {
   const exerciseId = exercise.id || summary.exerciseId || 'exercise';
@@ -11,12 +28,17 @@ export function buildPracticeSessionPayload({
     exerciseId,
     exerciseTitle: exercise.title || exercise.labelTh || exercise.label || exerciseId,
     kind: isPlanExercise ? 'plan' : 'extra',
+    sessionVersion: PRACTICE_SESSION_VERSION,
+    referenceVersion: reference?.referenceVersion ?? summary.referenceVersion ?? null,
+    scoringVersion: reference?.scoringVersion ?? summary.scoringVersion ?? null,
     endedAt,
     score: summary.overallScore,
     avgScore: summary.avgScore ?? summary.overallScore,
     reps: summary.reps,
     validReps: summary.validReps,
     invalidRepCount: summary.invalidRepCount,
+    scoreBreakdown: sessionScoreBreakdown(summary),
+    invalidReasons: summary.invalidReasons || {},
     summary,
   };
 }

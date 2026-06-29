@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { jointAngleCalculator } from '../../shared/ai/JointAngleCalculator.js';
+import { angleAt3D, jointAngleCalculator, jointAngleCalculatorDetailed } from '../../shared/ai/JointAngleCalculator.js';
 import { drawAngleOverlayForJoints } from '../../shared/ai/AngleOverlay.js';
 import { drawBoundaryBox, evaluateBoundaryBox } from '../../shared/ai/BoundaryBoxGate.js';
 import { poseComparator } from '../../shared/ai/PoseComparator.js';
@@ -9,6 +9,26 @@ import { makeBasePose, makeElbowPose, makeMockCanvasContext, setPoint } from '..
 test('jointAngleCalculator computes angles from real landmark geometry', () => {
   const angles = jointAngleCalculator(makeElbowPose(90));
   assert.ok(Math.abs(angles.left_elbow - 90) < 0.1, `left elbow angle was ${angles.left_elbow}`);
+});
+
+test('jointAngleCalculatorDetailed reports missing joints without fake shoulder fallback', () => {
+  const pose = makeBasePose();
+  setPoint(pose, 'right_hip', 0.57, 0.62, 0.1);
+  const detailed = jointAngleCalculatorDetailed(pose);
+
+  assert.equal(detailed.angles.right_shoulder, null);
+  assert.deepEqual(detailed.meta.missingByJoint.right_shoulder, ['right_hip']);
+  assert.equal(detailed.meta.unusableJoints.includes('right_shoulder'), true);
+  assert.equal(detailed.meta.usableJointRatio < 1, true);
+});
+
+test('angleAt3D computes a stable 3D angle without enabling it globally', () => {
+  const angle = angleAt3D(
+    { x: 1, y: 0, z: 0 },
+    { x: 0, y: 0, z: 0 },
+    { x: 0, y: 1, z: 0 },
+  );
+  assert.ok(Math.abs(angle - 90) < 0.1, `3D angle was ${angle}`);
 });
 
 test('evaluateBoundaryBox detects inside, outside, no-pose, and missing visibility', () => {
@@ -31,6 +51,32 @@ test('evaluateBoundaryBox detects inside, outside, no-pose, and missing visibili
   assert.equal(missing.status, 'outside');
   assert.equal(missing.missingNames?.includes?.('left_elbow') ?? missing.missing.length > 0, true);
 });
+
+test('evaluateBoundaryBox honors exercise required joints and min visibility metadata', () => {
+  const exercise = {
+    id: 'custom_visibility',
+    primaryJoint: 'right_shoulder',
+    bodyRegion: 'right_arm',
+    requiredJoints: ['right_shoulder', 'right_elbow', 'right_hip'],
+    minVisibility: 0.8,
+  };
+  const pose = makeBasePose();
+  setPoint(pose, 'right_elbow', 0.71, 0.5, 0.7);
+  const boundary = evaluateBoundaryBox(pose, null, exercise, 500);
+
+  assert.equal(boundary.status, 'outside');
+  assert.deepEqual(boundary.missingNames, ['right_elbow']);
+  assert.deepEqual(boundaryKeyNames(boundary.keyIndices), ['right_shoulder', 'right_elbow', 'right_hip']);
+});
+
+function boundaryKeyNames(indices) {
+  const byIndex = new Map([
+    [12, 'right_shoulder'],
+    [14, 'right_elbow'],
+    [24, 'right_hip'],
+  ]);
+  return indices.map((index) => byIndex.get(index)).filter(Boolean);
+}
 
 test('poseComparator scores near pose higher than bad pose', () => {
   const good = poseComparator(

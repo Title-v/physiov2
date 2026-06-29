@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createMotionQualityEngine, REFERENCE_KINDS } from '../../shared/ai/MotionQualityEngine.js';
 import { createPracticeFrameProcessor, ghostLandmarksForSnapshot } from '../../shared/practice/frame.js';
-import { makeElbowPose } from '../helpers/pose-fixtures.mjs';
+import { makeElbowPose, setPoint } from '../helpers/pose-fixtures.mjs';
 
 const inside = { status: 'inside' };
 
@@ -72,8 +72,29 @@ test('live landmarks produce boundary, angles, snapshot, and overlay joints', ()
   assert.equal(result.hasPose, true);
   assert.equal(result.boundary.status, 'inside');
   assert.equal(Number.isFinite(result.liveAngles.left_elbow), true);
+  assert.equal(result.angleMeta.usableJoints.includes('left_elbow'), true);
   assert.equal(result.snapshot.hasPose, true);
   assert.deepEqual(result.overlayJoints, ['left_elbow']);
+});
+
+test('practice frame passes low-visibility angle metadata into the motion engine', () => {
+  const exercise = { ...elbowExercise(), minVisibility: 0.5 };
+  const reference = elbowReference();
+  const engine = createMotionQualityEngine({ exercise, reference });
+  const processor = createPracticeFrameProcessor({ exercise, reference, motionEngine: engine });
+  const pose = makeElbowPose(80);
+  setPoint(pose, 'left_wrist', 0.25, 0.64, 0.1);
+
+  const result = processor.processPracticeFrame({
+    landmarks: pose,
+    boundary: inside,
+    timestamp: 0,
+  });
+
+  assert.equal(result.liveAngles.left_elbow, null);
+  assert.deepEqual(result.angleMeta.missingByJoint.left_elbow, ['left_wrist']);
+  assert.equal(result.snapshot.visibleJointRatio, 0);
+  assert.equal(result.snapshot.visibilityScore, 0);
 });
 
 test('motion frame sequence through shared processor counts a rep', () => {
@@ -106,6 +127,53 @@ test('motion frame sequence through shared processor counts a rep', () => {
   });
   assert.equal(result.snapshot.reps, 1);
   assert.equal(engine.finishSummary().validReps, 1);
+});
+
+test('async practice frame processor can feed classifier signal into motion scoring', async () => {
+  const exercise = elbowExercise();
+  const reference = elbowReference();
+  const engine = createMotionQualityEngine({
+    exercise,
+    reference,
+    dose: { reps: 1, sets: 1 },
+    thresholds: { holdTargetMs: 40, holdRestMs: 40, minRepMs: 200 },
+  });
+  const calls = [];
+  const processor = createPracticeFrameProcessor({
+    exercise,
+    reference,
+    motionEngine: engine,
+    classifierWindowSize: 3,
+    motionClassifier: {
+      async predict(frames) {
+        calls.push(frames.length);
+        return { phase: 'moving_to_target', quality: 'wrong_path', confidence: 0.9 };
+      },
+    },
+  });
+  for (const [timestamp, angle] of [
+    [0, 30],
+    [120, 30],
+    [300, 65],
+    [520, 110],
+    [660, 110],
+    [900, 70],
+    [1180, 30],
+    [1320, 30],
+  ]) {
+    await processor.processPracticeFrameWithAi({
+      landmarks: makeElbowPose(angle),
+      liveAngles: { left_elbow: angle },
+      boundary: inside,
+      timestamp,
+    });
+  }
+  const summary = engine.finishSummary();
+
+  assert.equal(Math.max(...calls), 3);
+  assert.equal(summary.reps, 1);
+  assert.equal(summary.validReps, 0);
+  assert.equal(summary.invalidReasons.ai_wrong_path, 1);
 });
 
 test('hold reference produces hold snapshot through shared processor', () => {

@@ -9,18 +9,32 @@ import {
   toPatientExercise,
 } from '../../shared/core/patient-exercises.js';
 import { buildPracticeSessionPayload, summaryMetrics } from '../../shared/practice/session.js';
+import { EXERCISES, requiredJointsForExercise, scoringProfileForExercise } from '../../shared/core/exercises.js';
+import { savePracticeSession } from '../../apps/patient/sessionSync.js';
 
 test('patient exercise helpers expose built-ins and normalize plan overrides', () => {
   assert.ok(PATIENT_EXERCISES.length >= 5);
   const shoulder = toPatientExercise({ id: 'shoulder', label: 'Shoulder', bodyRegion: 'right_arm', reps: 10, sets: 3 });
   assert.equal(shoulder.title, 'ยกแขนขึ้น');
   assert.equal(shoulder.bodyRegionLabel, 'แขนขวา');
+  assert.equal(shoulder.scoringProfile, 'upper_limb_rom');
+  assert.ok(shoulder.setupInstruction.includes('กล้อง'));
 
   const normalized = normalizePatientExercise({ id: 'shoulder', target: 140 }, { reps: 8, sets: 2 });
   assert.equal(normalized.reps, 8);
   assert.equal(normalized.sets, 2);
   assert.equal(normalized.target, 140);
   assert.equal(practiceDose(normalized).reps, 8);
+});
+
+test('built-in exercises expose production metadata', () => {
+  for (const exercise of EXERCISES) {
+    assert.ok(Array.isArray(exercise.requiredJoints), `${exercise.id} missing requiredJoints`);
+    assert.ok(exercise.requiredJoints.length > 0, `${exercise.id} has empty requiredJoints`);
+    assert.equal(Number.isFinite(exercise.minVisibility), true, `${exercise.id} missing minVisibility`);
+    assert.equal(typeof scoringProfileForExercise(exercise), 'string');
+  }
+  assert.deepEqual(requiredJointsForExercise(EXERCISES.find((ex) => ex.id === 'shoulder')), ['right_shoulder', 'right_elbow', 'right_hip']);
 });
 
 test('reference and overlay helpers select patient-facing practice data', () => {
@@ -54,6 +68,9 @@ test('buildPracticeSessionPayload uses final summary scores and plan kind', () =
   assert.equal(payload.validReps, 9);
   assert.equal(payload.invalidRepCount, 1);
   assert.equal(payload.summary, summary);
+  assert.equal(payload.sessionVersion, 2);
+  assert.equal(payload.scoreBreakdown.overall, 88);
+  assert.deepEqual(payload.invalidReasons, {});
 });
 
 test('buildPracticeSessionPayload falls back avgScore and marks extra sessions', () => {
@@ -88,4 +105,43 @@ test('summaryMetrics matches patient summary screen values', () => {
     reps: 8,
     validLabel: '7/8',
   });
+});
+
+test('savePracticeSession posts versioned payload and merges server response', async () => {
+  const session = await savePracticeSession({
+    exercise: { id: 'shoulder', title: 'Shoulder raise' },
+    planItems: [{ exerciseId: 'shoulder' }],
+    run: {
+      reference: { referenceVersion: 3, scoringVersion: 3 },
+      summary: { overallScore: 90, reps: 2, validReps: 2, invalidRepCount: 0 },
+    },
+    endedAt: 1000,
+    postSession: async (path, payload) => {
+      assert.equal(path, '/sessions');
+      assert.equal(payload.sessionVersion, 2);
+      assert.equal(payload.referenceVersion, 3);
+      assert.equal(payload.scoreBreakdown.overall, 90);
+      return { id: 'server-session', endedAt: '1970-01-01T00:00:02.000Z' };
+    },
+  });
+
+  assert.equal(session.id, 'server-session');
+  assert.equal(session.endedAt, 2000);
+  assert.equal(session.score, 90);
+});
+
+test('savePracticeSession falls back to local payload when session POST fails', async () => {
+  const session = await savePracticeSession({
+    exercise: { id: 'balance', title: 'Balance' },
+    run: {
+      reference: { referenceVersion: 3 },
+      summary: { overallScore: 74, reps: 1, validReps: 1, invalidRepCount: 0 },
+    },
+    endedAt: 77,
+    postSession: async () => { throw new Error('offline'); },
+  });
+
+  assert.equal(session.id, 'patient_balance_77');
+  assert.equal(session.endedAt, 77);
+  assert.equal(session.score, 74);
 });

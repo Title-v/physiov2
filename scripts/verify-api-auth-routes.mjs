@@ -10,6 +10,7 @@ function check(name, pass) {
 function createHandlers({
   ready = true,
   serviceRole = '',
+  allowTherapistRegistration = false,
   signInResult,
   signUpResult,
   createUserResult,
@@ -66,6 +67,7 @@ function createHandlers({
       supabaseClient,
       TABLES: { profiles: 'profiles' },
       SUPABASE_SERVICE_ROLE_KEY: serviceRole,
+      ALLOW_THERAPIST_REGISTRATION: allowTherapistRegistration,
       fetchProfile: async () => profile,
     }),
   };
@@ -98,12 +100,14 @@ function createHandlers({
 }
 
 {
-  const { handlers } = createHandlers();
+  const { handlers, calls } = createHandlers();
   const result = await handlers.register({
     body: { name: 'Patient', email: 'p@example.com', password: 'pw', role: 'patient' },
     headers: { origin: 'https://app.example.com' },
   });
+  const signUp = calls.find((call) => call.signUp);
   check('register without service role signs up and logs in', result.status === 200 && result.body.token === 'token-1');
+  check('register sign-up metadata does not include role', signUp?.signUp?.options?.data?.name === 'Patient' && !('role' in signUp.signUp.options.data));
 }
 
 {
@@ -123,7 +127,17 @@ function createHandlers({
     body: { name: 'Therapist', email: 't@example.com', password: 'pw', role: 'therapist' },
     headers: {},
   });
-  check('register with service role creates confirmed user', result.status === 200 && calls.some((call) => call.createUser?.email_confirm === true));
+  check('therapist self-register is disabled by default', result.status === 403 && result.body.error === 'forbidden' && !calls.some((call) => call.createUser));
+}
+
+{
+  const { handlers, calls } = createHandlers({ serviceRole: 'service-key', allowTherapistRegistration: true });
+  const result = await handlers.register({
+    body: { name: 'Therapist', email: 't@example.com', password: 'pw', role: 'therapist' },
+    headers: {},
+  });
+  check('therapist register requires explicit enablement', result.status === 200 && calls.some((call) => call.createUser?.email_confirm === true));
+  check('therapist role is written only to profile row', calls.some((call) => call.upsert?.role === 'therapist') && calls.every((call) => !call.createUser?.user_metadata?.role));
 }
 
 {
