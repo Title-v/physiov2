@@ -184,6 +184,12 @@ const patientReq = (body = {}, query = {}) => ({
 
 {
   const { handlers } = createHandlers();
+  const result = await handlers.createPatient(therapistReq({ name: 'Patient', email: 'not-email', password: 'pw' }));
+  check('create patient rejects malformed email payload', result.status === 400 && result.body.error === 'invalid_payload');
+}
+
+{
+  const { handlers } = createHandlers();
   const result = await handlers.getPlan(patientReq());
   check('get own plan returns plan document', result.status === 200 && result.body.patientId === 'p1' && result.body.items.length === 1);
 }
@@ -196,8 +202,20 @@ const patientReq = (body = {}, query = {}) => ({
 
 {
   const { handlers } = createHandlers();
+  const result = await handlers.putPlan(patientReq({ items: [{ exerciseId: 'knee', reps: 'many' }] }));
+  check('put plan rejects malformed dose payload', result.status === 400 && result.body.error === 'invalid_payload');
+}
+
+{
+  const { handlers } = createHandlers();
   const result = await handlers.postReference(patientReq({}));
   check('post reference requires exercise id', result.status === 400 && result.body.error === 'required');
+}
+
+{
+  const { handlers } = createHandlers();
+  const result = await handlers.postReference(patientReq({ exerciseId: 'bad id' }));
+  check('post reference rejects malformed exercise id', result.status === 400 && result.body.error === 'invalid_payload');
 }
 
 {
@@ -222,6 +240,12 @@ const patientReq = (body = {}, query = {}) => ({
   const { handlers } = createHandlers();
   const result = await handlers.postSession(patientReq({ exerciseId: 'shoulder', reps: 6, endedAt: 0 }));
   check('post session inserts and maps row', result.status === 201 && result.body.patientId === 'p1' && result.body.reps === 6);
+}
+
+{
+  const { handlers } = createHandlers();
+  const result = await handlers.postSession(patientReq({ exerciseId: 'shoulder', scoreBreakdown: [] }));
+  check('post session rejects malformed score breakdown', result.status === 400 && result.body.error === 'invalid_payload');
 }
 
 const failed = checks.filter((item) => !item.pass);

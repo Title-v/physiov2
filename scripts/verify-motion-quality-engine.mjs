@@ -44,6 +44,49 @@ function motionReference() {
   };
 }
 
+function nonlinearPathReference() {
+  return {
+    kind: REFERENCE_KINDS.MOTION_CYCLE,
+    exerciseId: 'shoulder_path',
+    movementPattern: 'unilateral',
+    repJoints: ['right_shoulder', 'right_elbow'],
+    scoringJoints: ['right_shoulder', 'right_elbow'],
+    dominantJoint: 'right_shoulder',
+    restJointAngles: { right_shoulder: 20, right_elbow: 20 },
+    targetJointAngles: { right_shoulder: 120, right_elbow: 120 },
+    jointMotion: {
+      right_shoulder: {
+        rest: 20,
+        target: 120,
+        range: 100,
+        tol: 15,
+        weight: 1,
+        contributesToProgress: true,
+      },
+      right_elbow: {
+        rest: 20,
+        target: 120,
+        range: 100,
+        tol: 15,
+        weight: 1,
+        contributesToProgress: false,
+      },
+    },
+    referenceSequence: {
+      kind: 'angle-trajectory',
+      cycle: 'rest-target-rest',
+      durationMs: 2000,
+      repJoints: ['right_shoulder', 'right_elbow'],
+      frames: [
+        { t: 0, p: 0, angles: { right_shoulder: 20, right_elbow: 20 } },
+        { t: 500, p: 0.5, angles: { right_shoulder: 70, right_elbow: 120 } },
+        { t: 1000, p: 1, angles: { right_shoulder: 120, right_elbow: 120 } },
+        { t: 2000, p: 0, angles: { right_shoulder: 20, right_elbow: 20 } },
+      ],
+    },
+  };
+}
+
 function alternatingReference(countMode = 'cycle') {
   const leftMotion = {
     rest: 20,
@@ -110,12 +153,26 @@ function alternatingReference(countMode = 'cycle') {
   };
 }
 
-function pushAngles(engine, values, boundary = inside, start = 1000, step = 160) {
+function pushAngles(engine, values, boundary = inside, start = 1000, step = 160, angleMeta = null, aiSignal = null) {
   let snapshot = null;
   values.forEach((angle, index) => {
     snapshot = engine.pushFrame({
       timestamp: start + index * step,
       jointAngles: { right_shoulder: angle },
+      angleMeta,
+      boundary,
+      aiSignal: typeof aiSignal === 'function' ? aiSignal(angle, index) : aiSignal,
+    });
+  });
+  return snapshot;
+}
+
+function pushShoulderAndElbow(engine, values, boundary = inside, start = 7000, step = 160) {
+  let snapshot = null;
+  values.forEach(([shoulder, elbow], index) => {
+    snapshot = engine.pushFrame({
+      timestamp: start + index * step,
+      jointAngles: { right_shoulder: shoulder, right_elbow: elbow },
       boundary,
     });
   });
@@ -145,6 +202,19 @@ check('rest-target-rest counts one rep', validSummary.reps === 1, validSummary);
 check('clean rep is valid', validSummary.validReps === 1 && validSummary.invalidRepCount === 0, validSummary);
 check('summary exposes score fields', Number.isFinite(validSummary.overallScore) && Number.isFinite(validSummary.avgTargetReachScore), validSummary);
 
+const aiFusionEngine = createMotionQualityEngine({ exercise, reference, dose: { reps: 1, sets: 1 } });
+pushAngles(
+  aiFusionEngine,
+  [20, 20, 60, 95, 120, 120, 80, 45, 20, 20],
+  inside,
+  3000,
+  160,
+  null,
+  { phase: 'moving_to_target', quality: 'wrong_path', confidence: 0.9 },
+);
+const aiFusionSummary = aiFusionEngine.finishSummary();
+check('high-confidence AI wrong_path can invalidate a rep assistively', aiFusionSummary.invalidReasons.ai_wrong_path === 1, aiFusionSummary);
+
 const incompleteEngine = createMotionQualityEngine({ exercise, reference, dose: { reps: 1, sets: 1 } });
 pushAngles(incompleteEngine, [20, 20, 50, 70, 80, 70, 40, 20, 20]);
 const incompleteSummary = incompleteEngine.finishSummary();
@@ -155,6 +225,33 @@ pushAngles(badBoundaryEngine, [20, 20, 60, 95, 120, 120, 80, 45, 20, 20], outsid
 const badBoundarySummary = badBoundaryEngine.finishSummary();
 check('completed out-of-frame rep counts', badBoundarySummary.reps === 1, badBoundarySummary);
 check('completed out-of-frame rep is invalid', badBoundarySummary.invalidRepCount === 1 && badBoundarySummary.invalidReasons.out_of_frame === 1, badBoundarySummary);
+
+const lowVisibilityEngine = createMotionQualityEngine({ exercise, reference, dose: { reps: 1, sets: 1 } });
+pushAngles(lowVisibilityEngine, [20, 20, 60, 95, 120, 120, 80, 45, 20, 20], inside, 5000, 160, { usableJoints: [], usableJointRatio: 0 });
+const lowVisibilitySummary = lowVisibilityEngine.finishSummary();
+check('completed low-visibility rep is invalid', lowVisibilitySummary.invalidRepCount === 1 && lowVisibilitySummary.invalidReasons.low_visibility === 1, lowVisibilitySummary);
+
+const wrongPathEngine = createMotionQualityEngine({
+  exercise: { id: 'shoulder_path', type: 'rep', primaryJoint: 'right_shoulder', reps: 1, sets: 1 },
+  reference: nonlinearPathReference(),
+  dose: { reps: 1, sets: 1 },
+  thresholds: { validScore: 85 },
+});
+pushShoulderAndElbow(wrongPathEngine, [
+  [20, 20],
+  [20, 20],
+  [45, 45],
+  [70, 70],
+  [70, 70],
+  [120, 120],
+  [120, 120],
+  [70, 70],
+  [45, 45],
+  [20, 20],
+  [20, 20],
+]);
+const wrongPathSummary = wrongPathEngine.finishSummary();
+check('completed wrong-path rep is invalid', wrongPathSummary.invalidReasons.wrong_path === 1 && wrongPathSummary.avgPoseScore > wrongPathSummary.avgPathScore, wrongPathSummary);
 
 const alternatingExercise = { id: 'march', type: 'rep', movementPattern: 'alternating', countMode: 'cycle', reps: 1, sets: 1 };
 const alternatingCycle = alternatingReference('cycle');

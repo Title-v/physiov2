@@ -7,6 +7,7 @@ export function createAuthHandlers({
   supabaseClient,
   TABLES,
   SUPABASE_SERVICE_ROLE_KEY = '',
+  ALLOW_THERAPIST_REGISTRATION = false,
   fetchProfile,
 }) {
   if (typeof supabaseReady !== 'function') {
@@ -30,8 +31,11 @@ export function createAuthHandlers({
     const email = String(req.body?.email || '').trim().toLowerCase();
     const password = String(req.body?.password || '');
     const name = String(req.body?.name || '').trim();
-    const role = req.body?.role === 'therapist' ? 'therapist' : 'patient';
+    const requestedTherapist = req.body?.role === 'therapist';
+    const role = requestedTherapist ? 'therapist' : 'patient';
     if (!email || !password || !name) return errorResult(400, 'required');
+    if (requestedTherapist && !ALLOW_THERAPIST_REGISTRATION) return errorResult(403, 'forbidden');
+    if (requestedTherapist && !SUPABASE_SERVICE_ROLE_KEY) return errorResult(500, 'service_role_required');
 
     try {
       let authUser = null;
@@ -41,7 +45,7 @@ export function createAuthHandlers({
           email,
           password,
           email_confirm: true,
-          user_metadata: { name, role },
+          user_metadata: { name },
         });
         if (created.error) return errorResult(400, normalizeAuthError(created.error), created.error.message);
         authUser = created.data.user;
@@ -50,7 +54,7 @@ export function createAuthHandlers({
         const signed = await supabaseClient().auth.signUp({
           email,
           password,
-          options: { data: { name, role }, emailRedirectTo: authEmailRedirectTo(req) },
+          options: { data: { name }, emailRedirectTo: authEmailRedirectTo(req) },
         });
         if (signed.error) return errorResult(400, normalizeAuthError(signed.error), signed.error.message);
         authUser = signed.data.user;

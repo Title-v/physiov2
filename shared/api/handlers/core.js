@@ -22,7 +22,7 @@ export function publicUser(authUser, profile) {
     id: profile?.id || authUser?.id,
     name: profile?.name || meta.name || authUser?.email?.split('@')[0] || 'User',
     email: profile?.email || authUser?.email || '',
-    role: profile?.role || meta.role || 'patient',
+    role: profile?.role || 'patient',
   };
 }
 

@@ -21,6 +21,7 @@ function createAuthDeps() {
   });
   const authHandlers = createAuthHandlers({
     ...runtime,
+    ALLOW_THERAPIST_REGISTRATION: ['1', 'true', 'yes', 'on'].includes(String(process.env.PHYSIOAI_ALLOW_THERAPIST_REGISTRATION || '').toLowerCase()),
     fetchProfile,
   });
   return { authHandlers, fetchProfile, runtime };

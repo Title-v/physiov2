@@ -4,7 +4,7 @@
 // validation. Rep exercises require a therapist motion reference; hold exercises
 // use a hold-pose reference. Completed bad reps are counted, then marked invalid.
 
-import { jointAngleCalculator } from './JointAngleCalculator.js';
+import { jointAngleCalculatorDetailed } from './JointAngleCalculator.js';
 
 export const REFERENCE_KINDS = {
   MOTION_CYCLE: 'motion_cycle',
@@ -25,9 +25,10 @@ export const DEFAULT_MOTION_THRESHOLDS = Object.freeze({
   visibleJointRatio: 0.8,
   minUsableRangeDeg: 15,
   weights: {
-    pose: 0.45,
+    pose: 0.35,
     path: 0.25,
     targetReach: 0.15,
+    visibility: 0.10,
     boundary: 0.10,
     tempo: 0.05,
   },
@@ -40,10 +41,31 @@ export const DEFAULT_HOLD_THRESHOLDS = Object.freeze({
   stabilityTolDeg: 8,
   minHoldCompletionRatio: 0.85,
   weights: {
-    pose: 0.65,
+    pose: 0.55,
     stability: 0.15,
+    visibility: 0.10,
     boundary: 0.15,
     duration: 0.05,
+  },
+});
+
+export const DEFAULT_AI_FUSION_THRESHOLDS = Object.freeze({
+  enabled: true,
+  minConfidence: 0.75,
+  minFrameRatio: 0.3,
+  penaltyWeight: 0.2,
+  qualityScores: {
+    good: 100,
+    incomplete: 55,
+    wrong_path: 40,
+    unstable: 50,
+    out_of_frame: 30,
+  },
+  reasonByQuality: {
+    incomplete: 'ai_incomplete',
+    wrong_path: 'ai_wrong_path',
+    unstable: 'ai_unstable',
+    out_of_frame: 'ai_out_of_frame',
   },
 });
 
@@ -223,6 +245,12 @@ function expectedFrameForProgress(sequence, progress) {
   return bestDistance === Infinity ? frames[0] : best;
 }
 
+function scorePathProgress(liveProgress, expectedProgress, tolerance = 0.15) {
+  if (!Number.isFinite(liveProgress) || !Number.isFinite(expectedProgress)) return 0;
+  const delta = Math.abs(liveProgress - expectedProgress);
+  return scoreClamp((1 - delta / Math.max(0.01, tolerance)) * 100);
+}
+
 function interpolatedAnglesFor(reference, progress) {
   const rest = reference?.restJointAngles;
   const target = reference?.targetJointAngles || reference?.jointAngles;
@@ -240,6 +268,16 @@ function interpolatedAnglesFor(reference, progress) {
 function expectedAnglesFor(reference, progress) {
   const frame = expectedFrameForProgress(reference?.referenceSequence, progress);
   return frame?.angles || interpolatedAnglesFor(reference, progress) || reference?.targetJointAngles || reference?.jointAngles || null;
+}
+
+function expectedPoseAnglesFor(reference, progress) {
+  return interpolatedAnglesFor(reference, progress) || reference?.targetJointAngles || reference?.jointAngles || expectedAnglesFor(reference, progress);
+}
+
+function scoreTrajectoryFrame(liveAngles, reference, progress, joints) {
+  const expectedFrame = expectedFrameForProgress(reference?.referenceSequence, progress);
+  if (!expectedFrame?.angles) return null;
+  return scoreAngles(liveAngles, expectedFrame.angles, reference, joints);
 }
 
 function scoreAngles(liveAngles, expectedAngles, reference, joints) {
@@ -276,6 +314,24 @@ function countReasons(reps) {
   return reasons;
 }
 
+function mergeCounts(...items) {
+  const out = {};
+  for (const item of items) {
+    for (const [key, value] of Object.entries(item || {})) out[key] = (out[key] || 0) + value;
+  }
+  return out;
+}
+
+function visibleRatioFromAngleMeta(angleMeta, joints, fallbackRatio = 0) {
+  if (!angleMeta) return fallbackRatio;
+  const trackedJoints = joints.filter(Boolean);
+  if (trackedJoints.length && Array.isArray(angleMeta.usableJoints)) {
+    const usable = new Set(angleMeta.usableJoints);
+    return trackedJoints.filter((joint) => usable.has(joint)).length / trackedJoints.length;
+  }
+  return Number.isFinite(angleMeta.usableJointRatio) ? angleMeta.usableJointRatio : fallbackRatio;
+}
+
 function aggregateReps(repSummaries, dose = {}) {
   const reps = repSummaries.length;
   const validReps = repSummaries.filter((rep) => rep.valid).length;
@@ -306,7 +362,10 @@ function aggregateReps(repSummaries, dose = {}) {
     avgPathScore: avg('pathScore'),
     avgTargetReachScore: avg('targetReachScore'),
     avgBoundaryScore: avg('boundaryScore'),
+    avgVisibilityScore: avg('visibilityScore'),
     avgTempoScore: avg('tempoScore'),
+    avgAiQualityScore: avg('aiQualityScore'),
+    aiSignalCounts: mergeCounts(...repSummaries.map((rep) => rep.aiSignalCounts)),
     invalidReasons: countReasons(repSummaries),
     repSummaries,
   };
@@ -325,6 +384,49 @@ function frameTimestamp(input) {
   return Number.isFinite(n) ? n : Date.now();
 }
 
+function assessAiSignal(aiSignal, thresholds) {
+  if (!thresholds.enabled || !aiSignal) return null;
+  const confidence = Number(aiSignal.confidence);
+  if (!Number.isFinite(confidence) || confidence < thresholds.minConfidence) return null;
+  const quality = thresholds.qualityScores[aiSignal.quality] != null ? aiSignal.quality : 'good';
+  const qualityScore = scoreClamp(thresholds.qualityScores[quality]);
+  return {
+    phase: aiSignal.phase || null,
+    quality,
+    confidence: clamp(confidence, 0, 1),
+    qualityScore,
+    reason: thresholds.reasonByQuality[quality] || null,
+  };
+}
+
+function summarizeAiAssessments(frames, thresholds) {
+  const assessments = frames.map((frame) => frame.aiAssessment).filter(Boolean);
+  const counts = {};
+  const reasonCounts = {};
+  for (const item of assessments) {
+    counts[item.quality] = (counts[item.quality] || 0) + 1;
+    if (item.reason) reasonCounts[item.reason] = (reasonCounts[item.reason] || 0) + 1;
+  }
+  const confidentFrameRatio = frames.length ? assessments.length / frames.length : 0;
+  const avgAiQualityScore = assessments.length ? scoreClamp(mean(assessments.map((item) => item.qualityScore)) ?? 100) : null;
+  const strongestReason = Object.entries(reasonCounts).sort((a, b) => b[1] - a[1])[0]?.[0] || null;
+  const reasonRatio = strongestReason && frames.length ? reasonCounts[strongestReason] / frames.length : 0;
+  return {
+    counts,
+    avgAiQualityScore,
+    confidentFrameRatio: Math.round(confidentFrameRatio * 1000) / 1000,
+    reason: reasonRatio >= thresholds.minFrameRatio ? strongestReason : null,
+    reasonRatio: Math.round(reasonRatio * 1000) / 1000,
+  };
+}
+
+function fuseAssistiveAiScore(ruleScore, aiSummary, thresholds) {
+  if (!Number.isFinite(ruleScore) || !aiSummary?.reason || !Number.isFinite(aiSummary.avgAiQualityScore)) return ruleScore;
+  const weight = clamp(Number(thresholds.penaltyWeight) || 0, 0, 0.5);
+  const fused = ruleScore * (1 - weight) + aiSummary.avgAiQualityScore * weight;
+  return Math.min(scoreClamp(ruleScore), scoreClamp(fused));
+}
+
 export function createMotionQualityEngine({
   exercise = {},
   reference,
@@ -338,6 +440,18 @@ export function createMotionQualityEngine({
   motionThresholds.weights = normalizeWeights(DEFAULT_MOTION_THRESHOLDS.weights, thresholds.weights || thresholds.motion?.weights || {});
   const holdThresholds = { ...DEFAULT_HOLD_THRESHOLDS, ...(thresholds.hold || {}) };
   holdThresholds.weights = normalizeWeights(DEFAULT_HOLD_THRESHOLDS.weights, thresholds.hold?.weights || {});
+  const aiThresholds = {
+    ...DEFAULT_AI_FUSION_THRESHOLDS,
+    ...(thresholds.ai || {}),
+    qualityScores: {
+      ...DEFAULT_AI_FUSION_THRESHOLDS.qualityScores,
+      ...(thresholds.ai?.qualityScores || {}),
+    },
+    reasonByQuality: {
+      ...DEFAULT_AI_FUSION_THRESHOLDS.reasonByQuality,
+      ...(thresholds.ai?.reasonByQuality || {}),
+    },
+  };
   const joints = knownJointsFrom(ref, exercise);
 
   let phase = kind === REFERENCE_KINDS.HOLD_POSE ? 'holding' : 'waiting_rest';
@@ -353,10 +467,16 @@ export function createMotionQualityEngine({
   let holdFrames = [];
   let holdStartedAt = null;
 
-  function anglesFromInput(input) {
-    if (input?.jointAngles) return input.jointAngles;
-    if (input?.landmarks) return jointAngleCalculator(input.landmarks);
-    return null;
+  function angleDataFromInput(input) {
+    if (input?.jointAngles) return { jointAngles: input.jointAngles, angleMeta: input.angleMeta || null };
+    if (input?.landmarks) {
+      const detailed = jointAngleCalculatorDetailed(input.landmarks, {
+        minVisibility: exercise.minVisibility,
+        use3D: exercise.allow3D,
+      });
+      return { jointAngles: detailed.angles, angleMeta: detailed.meta };
+    }
+    return { jointAngles: null, angleMeta: null };
   }
 
   function buildCue(snapshot) {
@@ -381,31 +501,42 @@ export function createMotionQualityEngine({
     const poseScore = avg('poseScore');
     const pathScore = avg('pathScore');
     const boundaryScore = scoreClamp(boundaryInsideRatio * 100);
-    const overallScore = scoreClamp(
+    const visibilityScore = avg('visibilityScore');
+    const aiSummary = summarizeAiAssessments(frames, aiThresholds);
+    const ruleOverallScore = scoreClamp(
       poseScore * motionThresholds.weights.pose +
       pathScore * motionThresholds.weights.path +
       targetReachScore * motionThresholds.weights.targetReach +
+      visibilityScore * motionThresholds.weights.visibility +
       boundaryScore * motionThresholds.weights.boundary +
       tempoScore * motionThresholds.weights.tempo,
     );
+    const overallScore = fuseAssistiveAiScore(ruleOverallScore, aiSummary, aiThresholds);
     const reasons = [];
     if (targetReachScore < motionThresholds.targetPct) reasons.push('incomplete_target');
+    if (pathScore < motionThresholds.validScore) reasons.push('wrong_path');
     if (overallScore < motionThresholds.validScore) reasons.push('low_pose_score');
     if (boundaryInsideRatio < motionThresholds.boundaryInsideRatio) reasons.push('out_of_frame');
     if (visibleJointRatio < motionThresholds.visibleJointRatio) reasons.push('low_visibility');
     if (durationMs < motionThresholds.minRepMs) reasons.push('too_fast');
     if (durationMs > motionThresholds.maxRepMs) reasons.push('too_slow');
+    if (aiSummary.reason) reasons.push(aiSummary.reason);
     const valid = !reasons.length;
     return {
       index: repSummaries.length + 1,
       valid,
       reasons,
       overallScore,
+      ruleOverallScore,
       poseScore,
       pathScore,
       targetReachScore,
       boundaryScore,
+      visibilityScore,
       tempoScore,
+      aiQualityScore: aiSummary.avgAiQualityScore,
+      aiSignalCounts: aiSummary.counts,
+      aiReasonRatio: aiSummary.reasonRatio,
       durationMs,
       side: activeSide,
       boundaryInsideRatio: Math.round(boundaryInsideRatio * 1000) / 1000,
@@ -429,11 +560,16 @@ export function createMotionQualityEngine({
       valid: sideChanged && first.valid && second.valid && !reasons.length,
       reasons,
       overallScore,
+      ruleOverallScore: avg('ruleOverallScore'),
       poseScore: avg('poseScore'),
       pathScore: avg('pathScore'),
       targetReachScore: avg('targetReachScore'),
       boundaryScore: avg('boundaryScore'),
+      visibilityScore: avg('visibilityScore'),
       tempoScore: avg('tempoScore'),
+      aiQualityScore: avg('aiQualityScore'),
+      aiSignalCounts: mergeCounts(first.aiSignalCounts, second.aiSignalCounts),
+      aiReasonRatio: Math.round(mean([first.aiReasonRatio, second.aiReasonRatio]) * 1000) / 1000,
       durationMs,
       sides: [first.side, second.side].filter(Boolean),
       sideSummaries: [first, second],
@@ -461,8 +597,10 @@ export function createMotionQualityEngine({
 
   function pushMotionFrame(input) {
     const timestamp = frameTimestamp(input);
+    const aiSignal = input?.aiSignal || null;
+    const aiAssessment = assessAiSignal(aiSignal, aiThresholds);
     lastFrameAt = timestamp;
-    const jointAngles = anglesFromInput(input);
+    const { jointAngles, angleMeta } = angleDataFromInput(input);
     const hasPose = !!jointAngles;
     const boundaryStatus = input?.boundary?.status || 'unknown';
     const isAlternating = kind === REFERENCE_KINDS.ALTERNATING_MOTION_CYCLE;
@@ -476,10 +614,13 @@ export function createMotionQualityEngine({
       ? (isAlternating ? (scoringRow?.progress ?? null) : motionProgress(jointAngles, ref, joints))
       : null;
     const progressPct = progress == null ? 0 : Math.round(progress * 100);
-    const expectedAngles = expectedAnglesFor(scoringReference, progress ?? 0);
-    const scored = hasPose ? scoreAngles(jointAngles, expectedAngles, scoringReference, scoringJoints) : { score: 0, rows: [], visibleRatio: 0, worst: null };
-    const pathScore = scored.score;
-    const poseScore = scored.score;
+    const poseExpectedAngles = expectedPoseAnglesFor(scoringReference, progress ?? 0);
+    const poseScored = hasPose ? scoreAngles(jointAngles, poseExpectedAngles, scoringReference, scoringJoints) : { score: 0, rows: [], visibleRatio: 0, worst: null };
+    const trajectoryScored = hasPose ? scoreTrajectoryFrame(jointAngles, scoringReference, progress ?? 0, scoringJoints) : null;
+    const pathScore = trajectoryScored?.score ?? poseScored.score;
+    const poseScore = poseScored.score;
+    const visibleJointRatio = visibleRatioFromAngleMeta(angleMeta, scoringJoints, poseScored.visibleRatio);
+    const visibilityScore = scoreClamp(visibleJointRatio * 100);
     const boundaryInside = isInside(input?.boundary);
     const frameScore = {
       timestamp,
@@ -487,7 +628,10 @@ export function createMotionQualityEngine({
       poseScore,
       pathScore,
       boundaryInside,
-      visibleJointRatio: scored.visibleRatio,
+      visibleJointRatio,
+      visibilityScore,
+      aiSignal,
+      aiAssessment,
     };
 
     const atRest = progressPct <= motionThresholds.restPct;
@@ -533,23 +677,34 @@ export function createMotionQualityEngine({
     }
 
     const aggregate = aggregateReps(repSummaries, dose);
-    const currentScore = scoreClamp(
+    const ruleCurrentScore = scoreClamp(
       poseScore * motionThresholds.weights.pose +
       pathScore * motionThresholds.weights.path +
       Math.min(100, (progressPct / motionThresholds.targetPct) * 100) * motionThresholds.weights.targetReach +
+      visibilityScore * motionThresholds.weights.visibility +
       (boundaryInside ? 100 : 0) * motionThresholds.weights.boundary +
       100 * motionThresholds.weights.tempo,
+    );
+    const currentScore = fuseAssistiveAiScore(
+      ruleCurrentScore,
+      aiAssessment?.reason ? { reason: aiAssessment.reason, avgAiQualityScore: aiAssessment.qualityScore } : null,
+      aiThresholds,
     );
     const snapshot = {
       kind,
       phase,
       hasPose,
       boundaryStatus,
+      aiSignal,
+      aiAssessment,
       progressPct,
       currentScore,
+      ruleCurrentScore,
       poseScore,
       pathScore,
       targetReachScore: Math.min(100, Math.round((progressPct / motionThresholds.targetPct) * 100)),
+      visibilityScore,
+      visibleJointRatio,
       boundaryScore: boundaryInside ? 100 : 0,
       tempoScore: 100,
       overallScore: currentScore,
@@ -557,8 +712,8 @@ export function createMotionQualityEngine({
       strongestSide: strongest?.side || null,
       sideProgresses: sideRows.map((row) => ({ side: row.side, progressPct: row.progressPct })),
       pendingAlternatingSide: pendingCycleRep?.side || null,
-      jointDeltas: scored.rows,
-      worstJoint: scored.worst,
+      jointDeltas: poseScored.rows,
+      worstJoint: poseScored.worst,
       repCount: aggregate.reps,
       reps: aggregate.reps,
       validReps: aggregate.validReps,
@@ -574,25 +729,34 @@ export function createMotionQualityEngine({
 
   function pushHoldFrame(input) {
     const timestamp = frameTimestamp(input);
+    const aiSignal = input?.aiSignal || null;
+    const aiAssessment = assessAiSignal(aiSignal, aiThresholds);
     lastFrameAt = timestamp;
-    const jointAngles = anglesFromInput(input);
+    const { jointAngles, angleMeta } = angleDataFromInput(input);
     const hasPose = !!jointAngles;
     const expectedAngles = ref?.holdTargetAngles || ref?.jointAngles || ref?.targetJointAngles || {};
     const scored = hasPose ? scoreAngles(jointAngles, expectedAngles, ref, joints) : { score: 0, rows: [], visibleRatio: 0, worst: null };
     if (holdStartedAt == null) holdStartedAt = timestamp;
     const boundaryInside = isInside(input?.boundary);
+    const visibleJointRatio = visibleRatioFromAngleMeta(angleMeta, joints, scored.visibleRatio);
+    const visibilityScore = scoreClamp(visibleJointRatio * 100);
     holdFrames.push({
       timestamp,
       poseScore: scored.score,
       boundaryInside,
-      visibleJointRatio: scored.visibleRatio,
+      visibleJointRatio,
+      visibilityScore,
       jointAngles,
+      aiSignal,
+      aiAssessment,
     });
     const summary = finishHoldSummary(timestamp);
     const snapshot = {
       kind,
       phase: 'holding',
       hasPose,
+      aiSignal,
+      aiAssessment,
       boundaryStatus: input?.boundary?.status || 'unknown',
       progressPct: summary.durationScore,
       repCount: summary.reps,
@@ -602,6 +766,7 @@ export function createMotionQualityEngine({
       poseScore: summary.avgPoseScore,
       stabilityScore: summary.avgStabilityScore,
       boundaryScore: summary.avgBoundaryScore,
+      visibilityScore: summary.avgVisibilityScore,
       durationScore: summary.durationScore,
       overallScore: summary.overallScore,
       currentScore: summary.overallScore,
@@ -623,6 +788,7 @@ export function createMotionQualityEngine({
     const boundaryInsideRatio = frames.length ? frames.filter((frame) => frame.boundaryInside).length / frames.length : 0;
     const avgBoundaryScore = scoreClamp(boundaryInsideRatio * 100);
     const visibleJointRatio = mean(frames.map((frame) => frame.visibleJointRatio)) ?? 0;
+    const avgVisibilityScore = scoreClamp(mean(frames.map((frame) => frame.visibilityScore)) ?? 0);
     const jointStability = [];
     for (const joint of joints) {
       jointStability.push(stdDev(frames.map((frame) => frame.jointAngles?.[joint])));
@@ -630,18 +796,22 @@ export function createMotionQualityEngine({
     const stabilitySpread = mean(jointStability) ?? 0;
     const avgStabilityScore = scoreClamp(100 - stabilitySpread / holdThresholds.stabilityTolDeg * 100);
     const durationScore = scoreClamp(durationMs / targetMs * 100);
-    const overallScore = scoreClamp(
+    const aiSummary = summarizeAiAssessments(frames, aiThresholds);
+    const ruleOverallScore = scoreClamp(
       avgPoseScore * holdThresholds.weights.pose +
       avgStabilityScore * holdThresholds.weights.stability +
+      avgVisibilityScore * holdThresholds.weights.visibility +
       avgBoundaryScore * holdThresholds.weights.boundary +
       durationScore * holdThresholds.weights.duration,
     );
+    const overallScore = fuseAssistiveAiScore(ruleOverallScore, aiSummary, aiThresholds);
     const reasons = [];
     if (overallScore < holdThresholds.validScore) reasons.push('low_pose_score');
     if (avgStabilityScore < holdThresholds.validScore) reasons.push('unstable_hold');
     if (boundaryInsideRatio < holdThresholds.boundaryInsideRatio) reasons.push('out_of_frame');
     if (visibleJointRatio < holdThresholds.visibleJointRatio) reasons.push('low_visibility');
     if (durationScore < holdThresholds.minHoldCompletionRatio * 100) reasons.push('incomplete_hold_duration');
+    if (aiSummary.reason) reasons.push(aiSummary.reason);
     const valid = !reasons.length;
     return {
       type: 'hold',
@@ -652,9 +822,14 @@ export function createMotionQualityEngine({
       holdSecActual: Math.round(durationMs / 1000),
       overallScore,
       avgScore: overallScore,
+      ruleOverallScore,
       avgPoseScore,
       avgStabilityScore,
       avgBoundaryScore,
+      avgVisibilityScore,
+      avgAiQualityScore: aiSummary.avgAiQualityScore,
+      aiSignalCounts: aiSummary.counts,
+      aiReasonRatio: aiSummary.reasonRatio,
       durationScore,
       boundaryInsideRatio: Math.round(boundaryInsideRatio * 1000) / 1000,
       visibleJointRatio: Math.round(visibleJointRatio * 1000) / 1000,
@@ -664,9 +839,14 @@ export function createMotionQualityEngine({
         valid,
         reasons,
         overallScore,
+        ruleOverallScore,
         poseScore: avgPoseScore,
         stabilityScore: avgStabilityScore,
         boundaryScore: avgBoundaryScore,
+        visibilityScore: avgVisibilityScore,
+        aiQualityScore: aiSummary.avgAiQualityScore,
+        aiSignalCounts: aiSummary.counts,
+        aiReasonRatio: aiSummary.reasonRatio,
         durationScore,
         durationMs,
       }],
@@ -679,6 +859,7 @@ export function createMotionQualityEngine({
         kind: ref?.kind || null,
         phase: 'missing_reference',
         hasPose: false,
+        aiSignal: input?.aiSignal || null,
         progressPct: 0,
         repCount: 0,
         reps: 0,

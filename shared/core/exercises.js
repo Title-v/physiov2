@@ -4,6 +4,80 @@
 // `dir`: 'up' (angle increases to peak) | 'down' (decreases to peak) | 'hold' (static).
 // These are sensible defaults; a therapist Capture overrides them with a measured reference.
 
+const DEFAULT_EXERCISE_METADATA = Object.freeze({
+  cameraOrientation: 'front',
+  cameraSide: 'any',
+  recommendedCameraDistanceM: [1.5, 3.0],
+  recommendedCameraHeight: 'chest',
+  minVisibility: 0.6,
+  minUsableJointRatio: 0.8,
+  minROMDeg: 15,
+  minRepMs: 600,
+  maxRepMs: 12000,
+  feedbackProfile: 'simple_patient',
+  allow3D: false,
+  allowMirror: true,
+  allowSeated: true,
+  contraindicationNote: '',
+});
+
+const EXERCISE_METADATA = {
+  shoulder: {
+    requiredJoints: ['right_shoulder', 'right_elbow', 'right_hip'],
+    optionalJoints: ['right_wrist', 'left_shoulder'],
+    movementPlane: 'frontal',
+    movementPattern: 'unilateral',
+    scoringProfile: 'upper_limb_rom',
+    setupInstructionTh: 'ยืนหันหน้าเข้ากล้อง ให้เห็นไหล่ ศอก และสะโพกขวาชัดเจน',
+    setupInstructionEn: 'Face the camera and keep the right shoulder, elbow, and hip visible.',
+  },
+  knee: {
+    requiredJoints: ['right_hip', 'right_knee', 'right_ankle'],
+    optionalJoints: ['right_foot_index', 'left_hip'],
+    movementPlane: 'sagittal',
+    movementPattern: 'unilateral',
+    scoringProfile: 'lower_limb_rom',
+    setupInstructionTh: 'นั่งหรือยืนให้กล้องเห็นสะโพก เข่า และข้อเท้าขวา',
+    setupInstructionEn: 'Keep the right hip, knee, and ankle visible to the camera.',
+  },
+  hip: {
+    requiredJoints: ['right_shoulder', 'right_hip', 'right_knee', 'right_ankle'],
+    optionalJoints: ['left_hip'],
+    movementPlane: 'frontal',
+    movementPattern: 'unilateral',
+    scoringProfile: 'lower_limb_rom',
+    setupInstructionTh: 'ยืนหันหน้าเข้ากล้อง ให้เห็นลำตัว สะโพก เข่า และข้อเท้าขวา',
+    setupInstructionEn: 'Face the camera and keep the trunk, right hip, knee, and ankle visible.',
+  },
+  squat: {
+    requiredJoints: ['left_hip', 'right_hip', 'left_knee', 'right_knee', 'left_ankle', 'right_ankle'],
+    optionalJoints: ['left_shoulder', 'right_shoulder'],
+    movementPlane: 'sagittal',
+    movementPattern: 'bilateralSync',
+    scoringProfile: 'bilateral_lower_limb',
+    recommendedCameraDistanceM: [2.0, 3.5],
+    setupInstructionTh: 'ถอยให้เห็นสะโพก เข่า และข้อเท้าทั้งสองข้างเต็มตัว',
+    setupInstructionEn: 'Step back so both hips, knees, and ankles are fully visible.',
+  },
+  balance: {
+    requiredJoints: ['right_hip', 'right_knee', 'right_ankle'],
+    optionalJoints: ['left_hip', 'left_knee', 'left_ankle'],
+    movementPlane: 'frontal',
+    movementPattern: 'hold',
+    scoringProfile: 'static_hold',
+    minROMDeg: 0,
+    minRepMs: 1000,
+    maxRepMs: 60000,
+    setupInstructionTh: 'ยืนให้นิ่งในกรอบกล้องและให้เห็นสะโพก เข่า ข้อเท้าขวา',
+    setupInstructionEn: 'Stand still in frame with the right hip, knee, and ankle visible.',
+  },
+};
+
+function withProductionMetadata(ex) {
+  const metadata = EXERCISE_METADATA[ex.id] || {};
+  return { ...DEFAULT_EXERCISE_METADATA, ...ex, ...metadata };
+}
+
 export const EXERCISES = [
   {
     id: 'shoulder', key: 'shoulder', icon: 'body', accent: '#7BA88F',
@@ -35,7 +109,7 @@ export const EXERCISES = [
     target: 70, rest: 70, tol: 18,
     reps: 1, sets: 2, holdSec: 20, type: 'hold',
   },
-];
+].map(withProductionMetadata);
 
 // The seed library = built-in popular exercises (used for demo + patient-selectable
 // "extras"). Therapist-captured custom exercises will carry source:'custom' and are
@@ -91,6 +165,22 @@ export function inferBodyRegion(primaryJoint) {
 }
 export function getBodyRegion(ex) {
   return ex?.bodyRegion ? normalizeBodyRegionId(ex.bodyRegion) : inferBodyRegion(ex?.primaryJoint);
+}
+
+export function exerciseMetadata(ex = {}) {
+  return { ...DEFAULT_EXERCISE_METADATA, ...(EXERCISE_METADATA[ex.id] || {}), ...ex };
+}
+
+export function requiredJointsForExercise(ex = {}) {
+  const metadata = exerciseMetadata(ex);
+  if (Array.isArray(metadata.requiredJoints) && metadata.requiredJoints.length) {
+    return [...new Set(metadata.requiredJoints.filter(Boolean))];
+  }
+  return [metadata.primaryJoint || defaultPrimaryJoint(metadata.bodyRegion)].filter(Boolean);
+}
+
+export function scoringProfileForExercise(ex = {}) {
+  return exerciseMetadata(ex).scoringProfile || (ex.type === 'hold' ? 'static_hold' : 'default_rep');
 }
 
 // ── Custom exercises (therapist-created via Capture) — persisted locally ──
@@ -154,6 +244,26 @@ export function exerciseSnapshot(ex) {
     returnRestJointAngles: ex.returnRestJointAngles,
     returnRestLandmarks: ex.returnRestLandmarks,
     referenceSequence: ex.referenceSequence,
+    cameraOrientation: ex.cameraOrientation,
+    cameraSide: ex.cameraSide,
+    recommendedCameraDistanceM: ex.recommendedCameraDistanceM,
+    recommendedCameraHeight: ex.recommendedCameraHeight,
+    requiredJoints: ex.requiredJoints,
+    optionalJoints: ex.optionalJoints,
+    minVisibility: ex.minVisibility,
+    minUsableJointRatio: ex.minUsableJointRatio,
+    minROMDeg: ex.minROMDeg,
+    minRepMs: ex.minRepMs,
+    maxRepMs: ex.maxRepMs,
+    movementPlane: ex.movementPlane,
+    scoringProfile: ex.scoringProfile,
+    feedbackProfile: ex.feedbackProfile,
+    allow3D: ex.allow3D,
+    allowMirror: ex.allowMirror,
+    allowSeated: ex.allowSeated,
+    setupInstructionTh: ex.setupInstructionTh,
+    setupInstructionEn: ex.setupInstructionEn,
+    contraindicationNote: ex.contraindicationNote,
   };
 }
 
@@ -177,6 +287,7 @@ export function saveCustomExercise({ label, bodyRegion, type = 'rep', movementPa
   const id = 'cust_' + Date.now().toString(36);
   const hold = type === 'hold';
   const ex = {
+    ...DEFAULT_EXERCISE_METADATA,
     id, key: id, source: 'custom', icon: 'body', accent: '#7BA88F',
     label: name, labelTh: name,
     primaryJoint, bodyRegion: region, type: hold ? 'hold' : 'rep', dir: hold ? 'hold' : 'up',
@@ -189,6 +300,12 @@ export function saveCustomExercise({ label, bodyRegion, type = 'rep', movementPa
     movementPattern: hold ? 'unilateral' : pattern,
     alternatingSides: pattern === 'alternating' ? ['left', 'right'] : undefined,
     countMode: pattern === 'alternating' ? mode : undefined,
+    requiredJoints: [primaryJoint, ...(region.includes('arm') ? [primaryJoint.replace('shoulder', 'elbow')] : [])].filter(Boolean),
+    optionalJoints: [],
+    movementPlane: region.includes('arm') || region === 'shoulder' ? 'frontal' : 'sagittal',
+    scoringProfile: hold ? 'static_hold' : 'default_rep',
+    setupInstructionTh: `จัดตำแหน่งให้กล้องเห็น${name}ชัดเจน`,
+    setupInstructionEn: `Set up so the camera can clearly see ${name}.`,
   };
   writeCustom([...readCustom().filter((e) => e.id !== id), ex]);
   return ex;

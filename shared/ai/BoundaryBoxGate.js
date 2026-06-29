@@ -3,6 +3,7 @@
 // and synthetic demo frames drawn into any canvas size.
 
 import { idx } from './Landmarks.js';
+import { exerciseMetadata } from '../core/exercises.js';
 
 export const BOUNDARY_BOX_RATIO = 0.95;
 
@@ -114,6 +115,10 @@ export function getBoundaryBox(ratio = BOUNDARY_BOX_RATIO) {
 }
 
 export function boundaryKeyJoints(exercise) {
+  const metadata = exerciseMetadata(exercise || {});
+  if (Array.isArray(metadata.requiredJoints) && metadata.requiredJoints.length) {
+    return [...new Set(metadata.requiredJoints.filter(Boolean))];
+  }
   const region = bodyRegion(exercise);
   const primary = exercise?.primaryJoint;
   const names = primary === 'back' || primary === 'neck' ? [] : [...REGION_KEYS[region]];
@@ -166,6 +171,8 @@ function hintFor(status) {
 
 export function evaluateBoundaryBox(landmarks, previousFrame = null, exercise = null, now = performance.now()) {
   const box = getBoundaryBox();
+  const metadata = exerciseMetadata(exercise || {});
+  const minVisibility = Number(metadata.minVisibility) || VIS_OK;
   const names = boundaryKeyJoints(exercise);
   const keySpecs = names.map((name) => ({ name, index: idx(name) })).filter((s) => s.index >= 0);
   const keyIndices = keySpecs.map((s) => s.index);
@@ -182,12 +189,12 @@ export function evaluateBoundaryBox(landmarks, previousFrame = null, exercise = 
 
   if (!landmarks || !landmarks.length) {
     const nextFrame = { landmarks: null, at: now, status: 'outside' };
-    return { status: 'outside', ok: false, box, bodyBox: null, missing: names, willExit: false, keyIndices, ...hintFor('outside'), nextFrame };
+    return { status: 'outside', ok: false, box, bodyBox: null, missing: names, missingNames: names, willExit: false, keyIndices, ...hintFor('outside'), nextFrame };
   }
 
   const isVisible = (i) => {
     const p = landmarks[i];
-    return !!(p && Number.isFinite(p.x) && Number.isFinite(p.y) && (p.visibility ?? 1) >= VIS_OK);
+    return !!(p && Number.isFinite(p.x) && Number.isFinite(p.y) && (p.visibility ?? 1) >= minVisibility);
   };
 
   for (const { name, index } of keySpecs) {
@@ -224,6 +231,7 @@ export function evaluateBoundaryBox(landmarks, previousFrame = null, exercise = 
     box,
     bodyBox,
     missing,
+    missingNames,
     willExit: false,
     softOutside: false,
     outsideStreak: status === 'outside' ? 1 : 0,

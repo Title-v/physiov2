@@ -48,14 +48,23 @@ that have actually been ported and verified.
 - Shared auth endpoint handlers live in `shared/api/handlers/auth-routes.js`.
 - Shared patient, plan, reference, and session endpoint handlers live in
   `shared/api/handlers/data-routes.js`.
+- Shared server-side payload validation for patient lookup/create, plans,
+  references, and sessions lives in `shared/api/handlers/payload-validation.js`.
 - Shared Supabase env, table, and client runtime helpers live in
   `shared/api/runtime/supabase.js`.
 
 ## Invariants
 
 - Bearer auth stays header-based.
+- Authorization role comes from `profiles.role`; user-editable auth metadata is
+  never trusted for role decisions.
+- Public therapist self-registration is disabled by default. It requires the
+  server-only `PHYSIOAI_ALLOW_THERAPIST_REGISTRATION=1` setup switch plus a
+  service role key.
 - Therapists can access linked patients only.
 - Patients can access only their own plan, references, and sessions.
+- Malformed write payloads fail with `400 invalid_payload` before database
+  writes; missing required payload fields keep returning `400 required`.
 - Plan/reference/session JSON shapes must preserve custom exercise snapshots,
   boundary metadata, joint angles, motion scores, and reference trajectories.
 - The root Next app is the final server surface; patient and therapist features
