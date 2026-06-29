@@ -45,6 +45,29 @@ test('extractMotionFeatureWindow computes angle velocity from previous frame tim
   assert.equal(window[1].angleVelocity.right_knee, 150);
 });
 
+test('extractMotionFeatures uses body-region schema landmarks when schema id is provided', () => {
+  const landmarks = Array.from({ length: DEFAULT_LANDMARK_COUNT }, (_, index) => ({
+    x: index / 100,
+    y: index / 200,
+    z: 0,
+    visibility: 0.9,
+  }));
+  const features = extractMotionFeatures({
+    t: 0,
+    landmarks,
+    jointAngles: { right_shoulder: 70, right_elbow: 120, left_knee: 30 },
+    boundaryStatus: 'inside',
+  }, {
+    landmarkSchemaId: 'right_arm.v1',
+  });
+
+  assert.equal(features.landmarks.length, 5);
+  assert.deepEqual(features.modelInputLandmarks, ['right_shoulder', 'right_elbow', 'right_wrist', 'left_shoulder', 'right_hip']);
+  assert.deepEqual(features.joints, ['right_elbow', 'right_shoulder']);
+  assert.equal(features.featureVector.length, 5 * 4 + 2 + 2 + 3);
+  assert.equal(features.landmarkSchemaId, 'right_arm.v1');
+});
+
 test('featureVectorsFromWindow returns vectors only for classifier input', () => {
   const vectors = featureVectorsFromWindow([
     { t: 0, landmarks: [[0.1, 0.2, 0, 0.9]], angles: { elbow: 10 } },

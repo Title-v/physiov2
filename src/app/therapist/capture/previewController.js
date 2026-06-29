@@ -167,6 +167,7 @@ export function buildSkeletonParameterPayload({
       bodyRegionRequired: true,
       bodyRegionSelected: true,
       bodyRegion: selectedRegion.id,
+      landmarkSchemaId: exercise.landmarkSchemaId || null,
     },
     bodyRegionSelection: selectedRegion,
     coordinateSystem: {
@@ -181,6 +182,11 @@ export function buildSkeletonParameterPayload({
       id: exercise.id,
       label: exerciseLabel,
       bodyRegion: selectedRegion.id,
+      landmarkSchemaId: exercise.landmarkSchemaId || null,
+      primaryRequiredLandmarks: exercise.primaryRequiredLandmarks || [],
+      stabilizerRequiredLandmarks: exercise.stabilizerRequiredLandmarks || [],
+      modelInputLandmarks: exercise.modelInputLandmarks || [],
+      jointNames: exercise.jointNames || [],
       movementPattern: exercise.movementPattern || 'unilateral',
       selectedOverlayJoints,
       selectedRepJoints: selectedJoints,
@@ -276,7 +282,24 @@ export function buildDatasetJsonlExportForCapture(payload, {
   source = 'therapist_capture',
   subjectId = 'anon_001',
 } = {}) {
-  const jsonl = buildMotionDatasetJsonlFromSkeletonPayload(payload, { label, source, subjectId });
+  const ex = payload?.exercise || {};
+  const jsonl = buildMotionDatasetJsonlFromSkeletonPayload(payload, {
+    label,
+    source,
+    subjectId,
+    motionLabel: null,
+    suggestedLabel: null,
+    dataQuality: 'usable',
+    labelStatus: 'draft',
+    trainable: false,
+    scoreable: false,
+    landmarkSchemaId: ex.landmarkSchemaId || payload?.flags?.landmarkSchemaId || null,
+    bodyRegion: ex.bodyRegion || payload?.flags?.bodyRegion || null,
+    primaryRequiredLandmarks: ex.primaryRequiredLandmarks || [],
+    stabilizerRequiredLandmarks: ex.stabilizerRequiredLandmarks || [],
+    modelInputLandmarks: ex.modelInputLandmarks || [],
+    jointNames: ex.jointNames || [],
+  });
   return jsonl ? { error: null, jsonl } : { error: 'unknown', jsonl: '' };
 }
 

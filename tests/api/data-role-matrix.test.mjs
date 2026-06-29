@@ -8,6 +8,8 @@ const TABLES = {
   plans: 'plans',
   references: 'references',
   sessions: 'sessions',
+  datasets: 'motion_datasets',
+  aiModels: 'ai_models',
 };
 
 const seedRows = {
@@ -33,6 +35,32 @@ const seedRows = {
       exercise_id: 'shoulder',
       ended_at: '2026-06-29T00:00:00.000Z',
       data: { exerciseId: 'shoulder', score: 88 },
+    },
+  ],
+  motion_datasets: [
+    {
+      id: 'ds_1',
+      therapist_id: 'therapist-1',
+      patient_id: 'patient-1',
+      exercise_id: 'shoulder',
+      landmark_schema_id: 'right_arm.v1',
+      label_status: 'reviewed',
+      data_quality: 'usable',
+      trainable: true,
+      data: { exerciseId: 'shoulder', motionLabel: 'good' },
+      created_at: '2026-06-29T00:00:00.000Z',
+    },
+  ],
+  ai_models: [
+    {
+      id: 'right_arm_tcn_v1',
+      therapist_id: 'therapist-1',
+      exercise_id: 'shoulder',
+      landmark_schema_id: 'right_arm.v1',
+      version: 'v1',
+      approved: false,
+      data: { id: 'right_arm_tcn_v1', version: 'v1' },
+      updated_at: '2026-06-29T00:00:00.000Z',
     },
   ],
 };
@@ -149,6 +177,44 @@ function writeCalls(calls) {
   return calls.filter((call) => ['upsert', 'insert', 'delete'].includes(call.op));
 }
 
+function validDatasetPayload() {
+  return {
+    id: 'ds_new',
+    exerciseId: 'shoulder',
+    landmarkSchemaId: 'right_arm.v1',
+    motionLabel: 'good',
+    label: 'good',
+    labelStatus: 'reviewed',
+    dataQuality: 'usable',
+    trainable: true,
+    scoreable: true,
+    missingPrimary: [],
+    missingStabilizer: [],
+    primaryRequiredLandmarks: ['right_shoulder', 'right_elbow', 'right_wrist'],
+    stabilizerRequiredLandmarks: ['left_shoulder', 'right_hip'],
+    modelInputLandmarks: ['right_shoulder', 'right_elbow', 'right_wrist', 'left_shoulder', 'right_hip'],
+    jointNames: ['right_shoulder', 'right_elbow'],
+    frames: [{ t: 0, landmarks: [[0.1, 0.2, 0, 0.9]], angles: { right_shoulder: 40 } }],
+  };
+}
+
+function validModelPayload() {
+  return {
+    id: 'right_arm_tcn_v2',
+    exerciseId: 'shoulder',
+    version: 'v2',
+    landmarkSchemaId: 'right_arm.v1',
+    inputShape: [30, 31],
+    modelInputLandmarks: ['right_shoulder', 'right_elbow', 'right_wrist', 'left_shoulder', 'right_hip'],
+    primaryRequiredLandmarks: ['right_shoulder', 'right_elbow', 'right_wrist'],
+    stabilizerRequiredLandmarks: ['left_shoulder', 'right_hip'],
+    jointNames: ['right_shoulder', 'right_elbow'],
+    phases: ['rest', 'moving_to_target', 'target', 'returning'],
+    qualities: ['good', 'incomplete', 'wrong_path', 'unstable'],
+    approved: false,
+  };
+}
+
 test('patient can access own plan but cannot target another patient', async () => {
   const db = createDb();
   const handlers = createHandlers(db);
@@ -174,6 +240,10 @@ test('therapist can access linked patient data across plan references and sessio
   assert.equal((await handlers.deleteReference(req({}, { patientId: 'patient-1', exerciseId: 'shoulder' }))).status, 204);
   assert.equal((await handlers.getSessions(req())).status, 200);
   assert.equal((await handlers.postSession(req({ exerciseId: 'shoulder', endedAt: 1000, score: 88 }))).status, 201);
+  assert.equal((await handlers.getDatasets(req())).status, 200);
+  assert.equal((await handlers.postDataset(req(validDatasetPayload()))).status, 201);
+  assert.equal((await handlers.getAiModels(req())).status, 200);
+  assert.equal((await handlers.postAiModel(req(validModelPayload()))).status, 201);
 });
 
 test('therapist cannot read or write unlinked patient data', async () => {
@@ -189,13 +259,15 @@ test('therapist cannot read or write unlinked patient data', async () => {
     await handlers.deleteReference(req({}, { patientId: 'patient-2', exerciseId: 'knee' })),
     await handlers.getSessions(req()),
     await handlers.postSession(req({ exerciseId: 'knee', endedAt: 1000, score: 70 })),
+    await handlers.getDatasets(req()),
+    await handlers.postDataset(req(validDatasetPayload())),
   ];
 
-  assert.deepEqual(results.map((result) => result.status), [403, 403, 403, 403, 403, 403, 403]);
+  assert.deepEqual(results.map((result) => result.status), [403, 403, 403, 403, 403, 403, 403, 403, 403]);
   assert.equal(writeCalls(db.calls).length, 0);
 });
 
-test('patient cannot use therapist roster endpoints', async () => {
+test('patient cannot use therapist roster dataset or model endpoints', async () => {
   const db = createDb();
   const handlers = createHandlers(db);
   const patientReq = request({ id: 'patient-1', role: 'patient' }, db, { patientId: 'patient-2' });
@@ -203,5 +275,9 @@ test('patient cannot use therapist roster endpoints', async () => {
   assert.equal((await handlers.listPatients(patientReq)).status, 403);
   assert.equal((await handlers.linkPatient(patientReq)).status, 403);
   assert.equal((await handlers.createPatient(patientReq)).status, 403);
+  assert.equal((await handlers.getDatasets(patientReq)).status, 403);
+  assert.equal((await handlers.postDataset(patientReq)).status, 403);
+  assert.equal((await handlers.getAiModels(patientReq)).status, 403);
+  assert.equal((await handlers.postAiModel(patientReq)).status, 403);
   assert.equal(writeCalls(db.calls).length, 0);
 });

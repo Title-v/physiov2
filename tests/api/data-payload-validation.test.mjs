@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import { createDataHandlers } from '../../shared/api/handlers/data-routes.js';
 import {
   validateCreatePatientPayload,
+  validateAiModelPayload,
+  validateDatasetPayload,
   validateDeleteReferencePayload,
   validatePatientLookupPayload,
   validatePlanPayload,
@@ -12,6 +14,8 @@ import {
 
 const TABLES = {
   sessions: 'sessions',
+  datasets: 'motion_datasets',
+  aiModels: 'ai_models',
   therapistPatients: 'therapist_patients',
   profiles: 'profiles',
   plans: 'plans',
@@ -42,6 +46,44 @@ function createNoWriteDb(calls = []) {
         single: async () => ({ data: null, error: null }),
       };
     },
+  };
+}
+
+function validDatasetPayload() {
+  return {
+    id: 'ds_1',
+    exerciseId: 'shoulder',
+    landmarkSchemaId: 'right_arm.v1',
+    motionLabel: 'good',
+    label: 'good',
+    labelStatus: 'reviewed',
+    dataQuality: 'usable',
+    trainable: true,
+    scoreable: true,
+    missingPrimary: [],
+    missingStabilizer: [],
+    primaryRequiredLandmarks: ['right_shoulder', 'right_elbow', 'right_wrist'],
+    stabilizerRequiredLandmarks: ['left_shoulder', 'right_hip'],
+    modelInputLandmarks: ['right_shoulder', 'right_elbow', 'right_wrist', 'left_shoulder', 'right_hip'],
+    jointNames: ['right_shoulder', 'right_elbow'],
+    frames: [{ t: 0, landmarks: [[0.1, 0.2, 0, 0.9]], angles: { right_shoulder: 40 } }],
+  };
+}
+
+function validAiModelPayload() {
+  return {
+    id: 'right_arm_tcn_v1',
+    exerciseId: 'shoulder',
+    version: 'v1',
+    landmarkSchemaId: 'right_arm.v1',
+    inputShape: [30, 31],
+    modelInputLandmarks: ['right_shoulder', 'right_elbow', 'right_wrist', 'left_shoulder', 'right_hip'],
+    primaryRequiredLandmarks: ['right_shoulder', 'right_elbow', 'right_wrist'],
+    stabilizerRequiredLandmarks: ['left_shoulder', 'right_hip'],
+    jointNames: ['right_shoulder', 'right_elbow'],
+    phases: ['rest', 'moving_to_target', 'target', 'returning'],
+    qualities: ['good', 'incomplete', 'wrong_path', 'unstable'],
+    approved: false,
   };
 }
 
@@ -86,6 +128,8 @@ test('data payload validators accept the current patient/therapist API shapes', 
   assert.equal(validateReferencePayload({ exerciseId: 'shoulder', kind: 'motion_cycle', referenceSequence: { frames: [] } }).ok, true);
   assert.equal(validateDeleteReferencePayload({ query: { exerciseId: 'shoulder' } }).ok, true);
   assert.equal(validateSessionPayload({ exerciseId: 'shoulder', endedAt: 1000, score: 88, summary: {} }).ok, true);
+  assert.equal(validateDatasetPayload(validDatasetPayload()).ok, true);
+  assert.equal(validateAiModelPayload(validAiModelPayload()).ok, true);
 });
 
 test('data payload validators reject malformed payloads with field-specific issues', () => {
@@ -95,6 +139,10 @@ test('data payload validators reject malformed payloads with field-specific issu
   assert.deepEqual(validateReferencePayload({ exerciseId: 'bad id' }).issues, ['exerciseId:invalid']);
   assert.deepEqual(validateDeleteReferencePayload({ body: { exerciseId: 'bad id' } }).issues, ['exerciseId:invalid']);
   assert.deepEqual(validateSessionPayload({ exerciseId: 'shoulder', summary: [] }).issues, ['summary:object_required']);
+  assert.equal(validateDatasetPayload({ ...validDatasetPayload(), labelStatus: 'draft' }).issues.includes('labelStatus:reviewed_required'), true);
+  assert.equal(validateDatasetPayload({ ...validDatasetPayload(), motionLabel: 'unlabeled' }).issues.includes('motionLabel:invalid'), true);
+  assert.equal(validateAiModelPayload({ ...validAiModelPayload(), inputShape: [0] }).issues.includes('inputShape:invalid'), true);
+  assert.equal(validateAiModelPayload({ ...validAiModelPayload(), approved: true }).issues.includes('approval:failed'), true);
 });
 
 test('data handlers reject invalid create/link patient payloads before database writes', async () => {
@@ -117,6 +165,8 @@ test('data handlers reject invalid plan/reference/session payloads before writes
   const refResult = await handlers.postReference(patientRequest({ exerciseId: 'bad id' }));
   const deleteResult = await handlers.deleteReference(patientRequest({}, { exerciseId: 'bad id' }));
   const sessionResult = await handlers.postSession(patientRequest({ exerciseId: 'shoulder', scoreBreakdown: [] }));
+  const datasetResult = await handlers.postDataset(therapistRequest({ ...validDatasetPayload(), trainable: false }));
+  const modelResult = await handlers.postAiModel(therapistRequest({ ...validAiModelPayload(), inputShape: [] }));
 
   assert.equal(planResult.status, 400);
   assert.equal(planResult.body.error, 'invalid_payload');
@@ -126,5 +176,9 @@ test('data handlers reject invalid plan/reference/session payloads before writes
   assert.equal(deleteResult.body.error, 'invalid_payload');
   assert.equal(sessionResult.status, 400);
   assert.equal(sessionResult.body.error, 'invalid_payload');
+  assert.equal(datasetResult.status, 400);
+  assert.equal(datasetResult.body.error, 'invalid_payload');
+  assert.equal(modelResult.status, 400);
+  assert.equal(modelResult.body.error, 'invalid_payload');
   assert.deepEqual(calls, []);
 });

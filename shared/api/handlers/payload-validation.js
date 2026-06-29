@@ -1,6 +1,7 @@
 const MAX_TEXT = 5000;
 const MAX_ITEMS = 100;
 const MAX_JSON_BYTES = 250_000;
+const MOTION_LABELS = ['good', 'incomplete', 'wrong_path', 'unstable'];
 
 function issue(path, code) {
   return `${path}:${code}`;
@@ -138,4 +139,85 @@ export function validateSessionPayload(body = {}) {
   if (body.scoreBreakdown != null && !isPlainObject(body.scoreBreakdown)) issues.push(issue('scoreBreakdown', 'object_required'));
   if (issues.length) return validationFail(issues);
   return validationOk({ exerciseId });
+}
+
+function isStringArray(value, { nonEmpty = false } = {}) {
+  if (!Array.isArray(value)) return false;
+  if (nonEmpty && !value.length) return false;
+  return value.every((item) => typeof item === 'string' && item.trim());
+}
+
+function validateInputShape(value) {
+  return Array.isArray(value) &&
+    value.length === 2 &&
+    value.every((item) => Number.isInteger(Number(item)) && Number(item) > 0);
+}
+
+export function validateDatasetPayload(body = {}) {
+  if (!isPlainObject(body)) return validationFail([issue('body', 'object_required')]);
+  const exerciseId = safeIdentifier(body.exerciseId);
+  const landmarkSchemaId = safeIdentifier(body.landmarkSchemaId);
+  const motionLabel = safeIdentifier(body.motionLabel || body.label);
+  const issues = validateJsonSize(body);
+  if (!exerciseId) issues.push(issue('exerciseId', body.exerciseId == null ? 'required' : 'invalid'));
+  if (!landmarkSchemaId) issues.push(issue('landmarkSchemaId', body.landmarkSchemaId == null ? 'required' : 'invalid'));
+  if (!MOTION_LABELS.includes(motionLabel)) issues.push(issue('motionLabel', motionLabel ? 'invalid' : 'required'));
+  if (body.labelStatus !== 'reviewed') issues.push(issue('labelStatus', 'reviewed_required'));
+  if (body.trainable !== true) issues.push(issue('trainable', 'true_required'));
+  if (body.dataQuality !== 'usable') issues.push(issue('dataQuality', 'usable_required'));
+  if (body.missingPrimary?.length) issues.push(issue('missingPrimary', 'must_be_empty'));
+  if (body.missingStabilizer?.length) issues.push(issue('missingStabilizer', 'must_be_empty'));
+  if (!Array.isArray(body.frames) || !body.frames.length) issues.push(issue('frames', 'required'));
+  if (!isStringArray(body.primaryRequiredLandmarks, { nonEmpty: true })) issues.push(issue('primaryRequiredLandmarks', 'required'));
+  if (!isStringArray(body.stabilizerRequiredLandmarks, { nonEmpty: true })) issues.push(issue('stabilizerRequiredLandmarks', 'required'));
+  if (!isStringArray(body.modelInputLandmarks, { nonEmpty: true })) issues.push(issue('modelInputLandmarks', 'required'));
+  if (!isStringArray(body.jointNames, { nonEmpty: true })) issues.push(issue('jointNames', 'required'));
+  if (body.id != null && !safeIdentifier(body.id, { max: 180 })) issues.push(issue('id', 'invalid'));
+  if (body.subjectId != null && !safeIdentifier(body.subjectId, { max: 180 })) issues.push(issue('subjectId', 'invalid'));
+  if (issues.length) return validationFail(issues);
+  return validationOk({
+    ...body,
+    exerciseId,
+    landmarkSchemaId,
+    motionLabel,
+    label: motionLabel,
+    missingPrimary: [],
+    missingStabilizer: [],
+  });
+}
+
+export function validateAiModelPayload(body = {}) {
+  if (!isPlainObject(body)) return validationFail([issue('body', 'object_required')]);
+  const modelId = safeIdentifier(body.id || body.modelId, { max: 180 });
+  const exerciseId = body.exerciseId == null ? null : safeIdentifier(body.exerciseId);
+  const landmarkSchemaId = safeIdentifier(body.landmarkSchemaId);
+  const version = safeIdentifier(body.version, { max: 180 });
+  const issues = validateJsonSize(body);
+  if (!modelId) issues.push(issue('id', (body.id == null && body.modelId == null) ? 'required' : 'invalid'));
+  if (body.exerciseId != null && !exerciseId) issues.push(issue('exerciseId', 'invalid'));
+  if (!landmarkSchemaId) issues.push(issue('landmarkSchemaId', body.landmarkSchemaId == null ? 'required' : 'invalid'));
+  if (!version) issues.push(issue('version', body.version == null ? 'required' : 'invalid'));
+  if (!validateInputShape(body.inputShape)) issues.push(issue('inputShape', 'invalid'));
+  if (!isStringArray(body.modelInputLandmarks, { nonEmpty: true })) issues.push(issue('modelInputLandmarks', 'required'));
+  if (!isStringArray(body.primaryRequiredLandmarks, { nonEmpty: true })) issues.push(issue('primaryRequiredLandmarks', 'required'));
+  if (!isStringArray(body.stabilizerRequiredLandmarks, { nonEmpty: true })) issues.push(issue('stabilizerRequiredLandmarks', 'required'));
+  if (!isStringArray(body.jointNames, { nonEmpty: true })) issues.push(issue('jointNames', 'required'));
+  if (!isStringArray(body.phases, { nonEmpty: true })) issues.push(issue('phases', 'required'));
+  if (!isStringArray(body.qualities, { nonEmpty: true })) issues.push(issue('qualities', 'required'));
+  if (body.approved === true) {
+    const approval = body.approval || body.evaluation || {};
+    if (!isPlainObject(approval)) issues.push(issue('approval', 'object_required'));
+    if (approval.ok !== true) issues.push(issue('approval', 'failed'));
+    if (Array.isArray(approval.issues) && approval.issues.length) issues.push(issue('approval', 'failed'));
+  }
+  if (issues.length) return validationFail(issues);
+  return validationOk({
+    ...body,
+    id: modelId,
+    modelId,
+    exerciseId,
+    landmarkSchemaId,
+    version,
+    approved: body.approved === true,
+  });
 }

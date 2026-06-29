@@ -53,19 +53,18 @@ export const DEFAULT_AI_FUSION_THRESHOLDS = Object.freeze({
   enabled: true,
   minConfidence: 0.75,
   minFrameRatio: 0.3,
+  primaryWeight: 0.85,
   penaltyWeight: 0.2,
   qualityScores: {
     good: 100,
     incomplete: 55,
     wrong_path: 40,
     unstable: 50,
-    out_of_frame: 30,
   },
   reasonByQuality: {
     incomplete: 'ai_incomplete',
     wrong_path: 'ai_wrong_path',
     unstable: 'ai_unstable',
-    out_of_frame: 'ai_out_of_frame',
   },
 });
 
@@ -415,16 +414,17 @@ function summarizeAiAssessments(frames, thresholds) {
     counts,
     avgAiQualityScore,
     confidentFrameRatio: Math.round(confidentFrameRatio * 1000) / 1000,
+    scoreable: avgAiQualityScore != null && confidentFrameRatio >= thresholds.minFrameRatio,
     reason: reasonRatio >= thresholds.minFrameRatio ? strongestReason : null,
     reasonRatio: Math.round(reasonRatio * 1000) / 1000,
   };
 }
 
-function fuseAssistiveAiScore(ruleScore, aiSummary, thresholds) {
-  if (!Number.isFinite(ruleScore) || !aiSummary?.reason || !Number.isFinite(aiSummary.avgAiQualityScore)) return ruleScore;
-  const weight = clamp(Number(thresholds.penaltyWeight) || 0, 0, 0.5);
-  const fused = ruleScore * (1 - weight) + aiSummary.avgAiQualityScore * weight;
-  return Math.min(scoreClamp(ruleScore), scoreClamp(fused));
+function fuseAiPrimaryScore(ruleScore, aiSummary, thresholds) {
+  if (!aiSummary?.scoreable || !Number.isFinite(aiSummary.avgAiQualityScore)) return ruleScore;
+  if (!Number.isFinite(ruleScore)) return scoreClamp(aiSummary.avgAiQualityScore);
+  const weight = clamp(Number(thresholds.primaryWeight) || 0.85, 0, 1);
+  return scoreClamp(aiSummary.avgAiQualityScore * weight + ruleScore * (1 - weight));
 }
 
 export function createMotionQualityEngine({
@@ -511,7 +511,7 @@ export function createMotionQualityEngine({
       boundaryScore * motionThresholds.weights.boundary +
       tempoScore * motionThresholds.weights.tempo,
     );
-    const overallScore = fuseAssistiveAiScore(ruleOverallScore, aiSummary, aiThresholds);
+    const overallScore = fuseAiPrimaryScore(ruleOverallScore, aiSummary, aiThresholds);
     const reasons = [];
     if (targetReachScore < motionThresholds.targetPct) reasons.push('incomplete_target');
     if (pathScore < motionThresholds.validScore) reasons.push('wrong_path');
@@ -685,9 +685,13 @@ export function createMotionQualityEngine({
       (boundaryInside ? 100 : 0) * motionThresholds.weights.boundary +
       100 * motionThresholds.weights.tempo,
     );
-    const currentScore = fuseAssistiveAiScore(
+    const currentScore = fuseAiPrimaryScore(
       ruleCurrentScore,
-      aiAssessment?.reason ? { reason: aiAssessment.reason, avgAiQualityScore: aiAssessment.qualityScore } : null,
+      aiAssessment ? {
+        scoreable: true,
+        reason: aiAssessment.reason,
+        avgAiQualityScore: aiAssessment.qualityScore,
+      } : null,
       aiThresholds,
     );
     const snapshot = {
@@ -804,7 +808,7 @@ export function createMotionQualityEngine({
       avgBoundaryScore * holdThresholds.weights.boundary +
       durationScore * holdThresholds.weights.duration,
     );
-    const overallScore = fuseAssistiveAiScore(ruleOverallScore, aiSummary, aiThresholds);
+    const overallScore = fuseAiPrimaryScore(ruleOverallScore, aiSummary, aiThresholds);
     const reasons = [];
     if (overallScore < holdThresholds.validScore) reasons.push('low_pose_score');
     if (avgStabilityScore < holdThresholds.validScore) reasons.push('unstable_hold');

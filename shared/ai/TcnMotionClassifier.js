@@ -1,7 +1,7 @@
 import { featureVectorsFromWindow, extractMotionFeatureWindow } from './MotionFeatureExtractor.js';
 
 export const TCN_PHASES = ['rest', 'moving_to_target', 'target', 'returning'];
-export const TCN_QUALITIES = ['good', 'incomplete', 'wrong_path', 'unstable', 'out_of_frame'];
+export const TCN_QUALITIES = ['good', 'incomplete', 'wrong_path', 'unstable'];
 
 const PHASE_ALIASES = {
   rest_start: 'rest',
@@ -109,7 +109,19 @@ export function createTcnMotionClassifier({
     try {
       const model = await load();
       if (!model) return null;
+      const manifest = model.__physioAiManifest || {};
+      if (model.__physioAiManifest && manifest.approved !== true) {
+        logger?.warn?.('TCN motion classifier is not approved; falling back to rule-based scoring.');
+        return null;
+      }
+      const requestedSchema = options.landmarkSchemaId || options.exercise?.landmarkSchemaId || extractorOptions.landmarkSchemaId;
+      if (requestedSchema && manifest.landmarkSchemaId && requestedSchema !== manifest.landmarkSchemaId) {
+        logger?.warn?.(`TCN motion classifier schema mismatch: exercise ${requestedSchema}, model ${manifest.landmarkSchemaId}.`);
+        return null;
+      }
       const featureWindow = extractMotionFeatureWindow(frames, {
+        landmarkSchemaId: manifest.landmarkSchemaId || requestedSchema || undefined,
+        joints: manifest.jointNames || undefined,
         ...extractorOptions,
         ...(options.extractorOptions || {}),
       });

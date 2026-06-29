@@ -33,3 +33,8 @@ export function resetPatientSessionData(state) {
   state.lastSummary = null;
   state.loadError = null;
 }
+
+export function patientAllowsDemoExtras(state = {}) {
+  const session = state.session;
+  return !session || session.demo === true || session.guest === true || session.isGuest === true;
+}

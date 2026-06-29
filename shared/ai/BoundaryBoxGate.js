@@ -3,6 +3,8 @@
 // and synthetic demo frames drawn into any canvas size.
 
 import { idx } from './Landmarks.js';
+import { getBodyRegionLandmarkSchema } from './BodyRegionLandmarkSchema.js';
+import { evaluateMotionSafetyGate } from './MotionSafetyGate.js';
 import { exerciseMetadata } from '../core/exercises.js';
 
 export const BOUNDARY_BOX_RATIO = 0.95;
@@ -119,6 +121,10 @@ export function boundaryKeyJoints(exercise) {
   if (Array.isArray(metadata.requiredJoints) && metadata.requiredJoints.length) {
     return [...new Set(metadata.requiredJoints.filter(Boolean))];
   }
+  const schema = getBodyRegionLandmarkSchema(metadata);
+  if (schema?.modelInputLandmarks?.length) {
+    return [...schema.modelInputLandmarks];
+  }
   const region = bodyRegion(exercise);
   const primary = exercise?.primaryJoint;
   const names = primary === 'back' || primary === 'neck' ? [] : [...REGION_KEYS[region]];
@@ -164,7 +170,8 @@ function bodyBoxFor(points) {
   return { left, top, right, bottom, width: right - left, height: bottom - top };
 }
 
-function hintFor(status) {
+function hintFor(status, safety = null) {
+  if (safety?.hint || safety?.hintTh) return { hint: safety.hint, hintTh: safety.hintTh };
   if (status === 'inside') return { hint: 'Framing good', hintTh: 'อยู่ในกรอบแล้ว' };
   return { hint: 'Move inside the frame', hintTh: 'ขยับตัวให้อยู่ในกรอบ' };
 }
@@ -176,20 +183,39 @@ export function evaluateBoundaryBox(landmarks, previousFrame = null, exercise = 
   const names = boundaryKeyJoints(exercise);
   const keySpecs = names.map((name) => ({ name, index: idx(name) })).filter((s) => s.index >= 0);
   const keyIndices = keySpecs.map((s) => s.index);
-  const region = bodyRegion(exercise);
-  const virtualPrimary = exercise?.primaryJoint === 'back' || exercise?.primaryJoint === 'neck';
-  const coreNames = virtualPrimary ? boundaryKeyJoints(exercise) : REGION_CORE[region];
-  const coreIndices = coreNames.map(idx).filter((i) => i >= 0);
-  const distalNames = virtualPrimary ? [] : REGION_DISTAL[region];
-  const distalIndices = distalNames.map(idx).filter((i) => i >= 0);
-  const primaryIndex = exercise?.primaryJoint ? idx(exercise.primaryJoint) : -1;
+  const safety = evaluateMotionSafetyGate(landmarks, {
+    exercise: metadata,
+    boundaryBox: box,
+    minVisibility,
+  });
   const visible = [];
-  const missing = [];
-  const missingNames = [];
+  const missingNames = [...new Set([
+    ...(safety.missingPrimary || []),
+    ...(safety.missingStabilizer || []),
+  ])];
+  const missing = missingNames.map(idx).filter((index) => index >= 0);
 
   if (!landmarks || !landmarks.length) {
     const nextFrame = { landmarks: null, at: now, status: 'outside' };
-    return { status: 'outside', ok: false, box, bodyBox: null, missing: names, missingNames: names, willExit: false, keyIndices, ...hintFor('outside'), nextFrame };
+    return {
+      status: 'outside',
+      readinessStatus: safety.status,
+      dataQuality: safety.dataQuality,
+      ok: false,
+      trainable: false,
+      scoreable: false,
+      box,
+      bodyBox: null,
+      missing: names.map(idx).filter((index) => index >= 0),
+      missingNames: names,
+      willExit: false,
+      keyIndices,
+      primary: safety.primary,
+      stabilizer: safety.stabilizer,
+      landmarkSchemaId: safety.schemaId,
+      ...hintFor('outside', safety),
+      nextFrame,
+    };
   }
 
   const isVisible = (i) => {
@@ -201,33 +227,19 @@ export function evaluateBoundaryBox(landmarks, previousFrame = null, exercise = 
     const p = landmarks[index];
     if (isVisible(index)) {
       visible.push({ ...p, index, name });
-    } else {
-      missing.push(index);
-      missingNames.push(name);
     }
   }
 
   const bodyBox = bodyBoxFor(visible);
-  const coreVisible = coreIndices.filter(isVisible).length;
-  const distalVisible = distalIndices.filter(isVisible).length;
-  const primaryVisible = primaryIndex < 0 || isVisible(primaryIndex);
-  const expectedMissingNames = expectedExitNames(exercise);
-  const expectedMissing = missingNames.filter((name) => expectedMissingNames.has(name));
-  const unexpectedMissing = missingNames.filter((name) => !expectedMissingNames.has(name));
-  const expectedDistalMissing = expectedMissing.filter((name) => DISTAL.includes(name)).length;
-  const distalRequired = Math.max(0, distalIndices.length - 1);
-  const mostlyVisible = coreVisible === coreIndices.length
-    && distalVisible + expectedDistalMissing >= distalRequired
-    && primaryVisible
-    && unexpectedMissing.length === 0
-    && visible.length >= Math.max(0, keyIndices.length - Math.max(1, expectedMissing.length));
-  const outside = visible.some((p) => !insideBox(p, box) && !isExpectedTopExit(p, p.name, box, exercise));
-  const noPose = !mostlyVisible;
-  const status = noPose || outside ? 'outside' : 'inside';
+  const status = safety.ok ? 'inside' : 'outside';
   const nextFrame = { landmarks, at: now, status };
   return {
     status,
+    readinessStatus: safety.status,
+    dataQuality: safety.dataQuality,
     ok: status === 'inside',
+    trainable: safety.trainable,
+    scoreable: safety.scoreable,
     box,
     bodyBox,
     missing,
@@ -236,7 +248,10 @@ export function evaluateBoundaryBox(landmarks, previousFrame = null, exercise = 
     softOutside: false,
     outsideStreak: status === 'outside' ? 1 : 0,
     keyIndices,
-    ...hintFor(status),
+    primary: safety.primary,
+    stabilizer: safety.stabilizer,
+    landmarkSchemaId: safety.schemaId,
+    ...hintFor(status, safety),
     nextFrame,
   };
 }

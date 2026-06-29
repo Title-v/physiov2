@@ -34,6 +34,8 @@ try {
   const plans = await import('../src/app/plans/route.js');
   const references = await import('../src/app/references/route.js');
   const sessions = await import('../src/app/sessions/route.js');
+  const datasets = await import('../src/app/datasets/route.js');
+  const aiModels = await import('../src/app/ai-models/route.js');
 
   const authHeaders = { authorization: 'Bearer token', 'content-type': 'application/json' };
   await expectNotConfigured('patients GET handles missing env', patients.GET(new Request('http://localhost/patients', { headers: authHeaders })));
@@ -46,6 +48,10 @@ try {
   await expectNotConfigured('references DELETE handles missing env', references.DELETE(new Request('http://localhost/references?exerciseId=shoulder', { method: 'DELETE', headers: authHeaders })));
   await expectNotConfigured('sessions GET handles missing env', sessions.GET(new Request('http://localhost/sessions', { headers: authHeaders })));
   await expectNotConfigured('sessions POST handles missing env', sessions.POST(new Request('http://localhost/sessions', { method: 'POST', headers: authHeaders, body: '{}' })));
+  await expectNotConfigured('datasets GET handles missing env', datasets.GET(new Request('http://localhost/datasets', { headers: authHeaders })));
+  await expectNotConfigured('datasets POST handles missing env', datasets.POST(new Request('http://localhost/datasets', { method: 'POST', headers: authHeaders, body: '{}' })));
+  await expectNotConfigured('ai-models GET handles missing env', aiModels.GET(new Request('http://localhost/ai-models', { headers: authHeaders })));
+  await expectNotConfigured('ai-models POST handles missing env', aiModels.POST(new Request('http://localhost/ai-models', { method: 'POST', headers: authHeaders, body: '{}' })));
 } finally {
   for (const [key, value] of Object.entries(savedEnv)) {
     if (value == null) delete process.env[key];

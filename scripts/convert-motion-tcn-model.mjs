@@ -6,6 +6,7 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { TCN_PHASES, TCN_QUALITIES } from '../shared/ai/TcnMotionClassifier.js';
+import { getBodyRegionLandmarkSchema, modelManifestSchemaFields } from '../shared/ai/BodyRegionLandmarkSchema.js';
 
 function parseArgs(argv) {
   const args = {
@@ -14,6 +15,7 @@ function parseArgs(argv) {
     out: 'shared/models/motion-tcn',
     version: null,
     inputShape: null,
+    landmarkSchemaId: 'right_arm.v1',
     dryRun: false,
   };
   for (let i = 0; i < argv.length; i += 1) {
@@ -23,6 +25,7 @@ function parseArgs(argv) {
     else if (arg === '--out') args.out = argv[++i];
     else if (arg === '--version') args.version = argv[++i];
     else if (arg === '--input-shape') args.inputShape = argv[++i].split(',').map((value) => Number(value.trim()));
+    else if (arg === '--landmark-schema-id') args.landmarkSchemaId = argv[++i];
     else if (arg === '--dry-run') args.dryRun = true;
     else if (arg === '--help' || arg === '-h') args.help = true;
     else throw new Error(`Unknown argument: ${arg}`);
@@ -39,6 +42,7 @@ function usage() {
     'Options:',
     '  --version NAME          Model version written into manifest',
     '  --input-shape 30,139    Optional [window, feature] shape override',
+    '  --landmark-schema-id ID Body-region schema, default right_arm.v1',
     '  --dry-run               Validate inputs and print planned manifest without copying/converting',
   ].join('\n');
 }
@@ -103,7 +107,7 @@ export async function prepareMotionTcnModel(args) {
 
   if (args.dryRun) {
     if (args.fromTfjs) planned.model = await readTfjsModelSummary(args.fromTfjs);
-    planned.manifest = buildManifest({ version, inputShape: args.inputShape });
+    planned.manifest = buildManifest({ version, inputShape: args.inputShape, landmarkSchemaId: args.landmarkSchemaId });
     console.log(JSON.stringify(planned, null, 2));
     return planned;
   }
@@ -115,22 +119,25 @@ export async function prepareMotionTcnModel(args) {
     await runConverter(args.fromKeras, args.out);
   }
   const summary = await readTfjsModelSummary(args.out);
-  const manifest = buildManifest({ version, inputShape: args.inputShape, summary });
+  const manifest = buildManifest({ version, inputShape: args.inputShape, summary, landmarkSchemaId: args.landmarkSchemaId });
   await writeFile(path.join(args.out, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`);
   console.log(JSON.stringify({ ...planned, dryRun: false, model: summary, manifest }, null, 2));
   return planned;
 }
 
-function buildManifest({ version, inputShape = null, summary = null } = {}) {
+function buildManifest({ version, inputShape = null, summary = null, landmarkSchemaId = 'right_arm.v1' } = {}) {
+  const schema = getBodyRegionLandmarkSchema(landmarkSchemaId);
   return {
     name: 'motion-tcn',
     version,
     modelPath: './model.json',
+    ...modelManifestSchemaFields(schema),
     inputShape: Array.isArray(inputShape) && inputShape.length ? inputShape : null,
     phases: TCN_PHASES,
     qualities: TCN_QUALITIES,
     exerciseScope: [],
     accuracy: null,
+    approved: false,
     exportedAt: new Date().toISOString(),
     modelFormat: summary?.format || 'tfjs-layers-model',
     weightFiles: summary?.weightFiles || [],

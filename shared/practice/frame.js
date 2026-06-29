@@ -106,7 +106,11 @@ export function createPracticeFrameProcessor({
     const prepared = preparePracticeFrame(args);
     if (!prepared.hasPose) return prepared;
     let aiSignal = args.aiSignal || null;
-    if (!aiSignal && typeof motionClassifier?.predict === 'function') {
+    const safetyOk = prepared.boundary?.scoreable !== false && prepared.boundary?.trainable !== false;
+    if (!safetyOk) {
+      aiSignal = null;
+      classifierWindow = [];
+    } else if (!aiSignal && typeof motionClassifier?.predict === 'function') {
       classifierWindow.push({
         t: prepared.timestamp,
         timestamp: prepared.timestamp,
@@ -114,9 +118,15 @@ export function createPracticeFrameProcessor({
         jointAngles: prepared.liveAngles,
         angles: prepared.liveAngles,
         boundaryStatus: prepared.boundary?.status || 'unknown',
+        landmarkSchemaId: prepared.boundary?.landmarkSchemaId || exercise.landmarkSchemaId,
+        dataQuality: prepared.boundary?.dataQuality || null,
       });
       classifierWindow = classifierWindow.slice(-Math.max(1, classifierWindowSize));
-      aiSignal = await motionClassifier.predict(classifierWindow.slice(), classifierOptions).catch(() => null);
+      aiSignal = await motionClassifier.predict(classifierWindow.slice(), {
+        exercise,
+        landmarkSchemaId: prepared.boundary?.landmarkSchemaId || exercise.landmarkSchemaId,
+        ...classifierOptions,
+      }).catch(() => null);
     }
     return commitPracticeFrame(prepared, aiSignal);
   }

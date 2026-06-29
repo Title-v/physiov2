@@ -3,6 +3,7 @@ export function createTherapistCaptureState({ exerciseId, variant } = {}) {
     cameraOn: false,
     imageMode: false,
     mode: 'setup',
+    captureWorkflow: 'reference',
     exId: exerciseId,
     patientId: null,
     patients: [],
@@ -29,6 +30,27 @@ export function createTherapistCaptureState({ exerciseId, variant } = {}) {
     previewPlaying: false,
     previewLastAt: 0,
     previewRaf: 0,
+    advancedOpen: false,
+    dataset: {
+      active: false,
+      labelTarget: 'good',
+      targetReps: 10,
+      rows: [],
+      reviewOpen: false,
+      recorder: null,
+    },
+    aiReadiness: {
+      schemaId: null,
+      trainable: false,
+      scoreable: false,
+      missingPrimary: [],
+      missingStabilizer: [],
+      dataQuality: null,
+      hint: '',
+      hintTh: '',
+      primary: null,
+      stabilizer: null,
+    },
   };
 }
 

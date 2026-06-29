@@ -6,7 +6,7 @@ import {
 import { isUsablePracticeReference } from '../../shared/ai/MotionQualityEngine.js';
 import { createPatientPracticeRuntime } from './practiceRuntime.js';
 import { savePracticeSession } from './sessionSync.js';
-import { createPatientAppState, clearPatientAuthMessages, resetPatientSessionData } from './patientState.js';
+import { createPatientAppState, clearPatientAuthMessages, patientAllowsDemoExtras, resetPatientSessionData } from './patientState.js';
 import {
   authMessage,
   clearPatientSession,
@@ -157,6 +157,7 @@ async function route(action, target) {
   if (action === 'ready') {
     const id = target.dataset.id;
     const planItem = state.plan.items.find((item) => item.exerciseId === id);
+    if (!planItem && !patientAllowsDemoExtras(state)) return;
     const base = planItem?.exercise || byId.get(id) || state.exercise;
     state.exercise = { ...base, reference: referenceForExercise(base, state.references) };
     state.practiceRun = null;

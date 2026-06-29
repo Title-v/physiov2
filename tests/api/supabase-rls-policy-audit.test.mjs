@@ -10,7 +10,7 @@ function compact(sql) {
 }
 
 test('current Supabase schema enables RLS on every exposed PhysioAI table', () => {
-  for (const table of ['profiles', 'therapist_patients', 'plans', 'references', 'sessions']) {
+  for (const table of ['profiles', 'therapist_patients', 'plans', 'references', 'sessions', 'motion_datasets', 'ai_models']) {
     assert.match(schemaSql, new RegExp(`alter table public\\.${table} enable row level security`, 'i'));
   }
 });
@@ -21,6 +21,8 @@ test('current Supabase policies restrict patient data to owner or linked therapi
     assert.match(sql, new RegExp(`create policy "${table}_[^"]+".*on public\\.${table}.*private\\.is_linked_patient\\(patient_id\\)`, 'i'));
   }
   assert.match(sql, /create policy "profiles_select_own".*private\.is_linked_patient\(id\)/i);
+  assert.match(sql, /create policy "motion_datasets_insert_own".*private\.is_linked_patient\(patient_id\)/i);
+  assert.match(sql, /create policy "ai_models_insert_own".*private\.is_therapist\(\)/i);
   assert.doesNotMatch(sql, /auth\.role\s*\(/i);
 });
 

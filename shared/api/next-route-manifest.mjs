@@ -74,4 +74,24 @@ export const NEXT_API_ROUTES = [
     path: '/sessions',
     file: 'src/app/sessions/route.js',
   },
+  {
+    method: 'GET',
+    path: '/datasets',
+    file: 'src/app/datasets/route.js',
+  },
+  {
+    method: 'POST',
+    path: '/datasets',
+    file: 'src/app/datasets/route.js',
+  },
+  {
+    method: 'GET',
+    path: '/ai-models',
+    file: 'src/app/ai-models/route.js',
+  },
+  {
+    method: 'POST',
+    path: '/ai-models',
+    file: 'src/app/ai-models/route.js',
+  },
 ];

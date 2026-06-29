@@ -40,6 +40,8 @@ export function supabaseConfig(env = process.env) {
       plans: env.SUPABASE_PLANS_TABLE || 'plans',
       references: env.SUPABASE_REFERENCES_TABLE || 'references',
       sessions: env.SUPABASE_SESSIONS_TABLE || 'sessions',
+      datasets: env.SUPABASE_DATASETS_TABLE || 'motion_datasets',
+      aiModels: env.SUPABASE_AI_MODELS_TABLE || 'ai_models',
     },
   };
 }

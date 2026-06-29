@@ -3,6 +3,8 @@ export const MOTION_DATASET_SCHEMA_VERSION = 1;
 const DEFAULT_SOURCE = 'therapist_capture';
 const DEFAULT_LABEL = 'unlabeled';
 const DEFAULT_SUBJECT_ID = 'anon_001';
+const DEFAULT_DATA_QUALITY = 'usable';
+const DEFAULT_LABEL_STATUS = 'draft';
 
 function finiteNumber(value, fallback = 0) {
   const n = Number(value);
@@ -50,12 +52,28 @@ export function normalizeDatasetFrame(frame = {}, index = 0, firstT = 0) {
     angles: cleanObjectNumbers(frame.angles || frame.jointAngles || {}),
     phase: frame.phase || null,
     boundaryStatus: frame.boundaryStatus || frame.boundary?.status || null,
+    dataQuality: frame.dataQuality || frame.safety?.dataQuality || null,
+    safetyStatus: frame.safetyStatus || frame.safety?.status || null,
   };
 }
 
 export function buildMotionDatasetRow({
   exerciseId = null,
   label = DEFAULT_LABEL,
+  motionLabel = null,
+  suggestedLabel = null,
+  dataQuality = DEFAULT_DATA_QUALITY,
+  labelStatus = DEFAULT_LABEL_STATUS,
+  trainable = false,
+  scoreable = false,
+  missingPrimary = [],
+  missingStabilizer = [],
+  landmarkSchemaId = null,
+  bodyRegion = null,
+  primaryRequiredLandmarks = [],
+  stabilizerRequiredLandmarks = [],
+  modelInputLandmarks = [],
+  jointNames = [],
   phaseLabels = [],
   frames = [],
   source = DEFAULT_SOURCE,
@@ -73,11 +91,34 @@ export function buildMotionDatasetRow({
     version: MOTION_DATASET_SCHEMA_VERSION,
     exerciseId: exerciseId || metadata?.exerciseId || 'unknown',
     label: label || DEFAULT_LABEL,
+    motionLabel,
+    suggestedLabel,
+    dataQuality,
+    labelStatus,
+    trainable: trainable === true,
+    scoreable: scoreable === true,
+    missingPrimary: [...new Set(missingPrimary || [])],
+    missingStabilizer: [...new Set(missingStabilizer || [])],
+    landmarkSchemaId: landmarkSchemaId || metadata?.landmarkSchemaId || null,
+    bodyRegion: bodyRegion || metadata?.bodyRegion || null,
+    primaryRequiredLandmarks: [...new Set(primaryRequiredLandmarks || metadata?.primaryRequiredLandmarks || [])],
+    stabilizerRequiredLandmarks: [...new Set(stabilizerRequiredLandmarks || metadata?.stabilizerRequiredLandmarks || [])],
+    modelInputLandmarks: [...new Set(modelInputLandmarks || metadata?.modelInputLandmarks || [])],
+    jointNames: [...new Set(jointNames || metadata?.jointNames || [])],
     phaseLabels: phases,
     frames: normalizedFrames,
     source: source || DEFAULT_SOURCE,
     subjectId: subjectId || DEFAULT_SUBJECT_ID,
-    metadata: { ...metadata },
+    metadata: {
+      ...metadata,
+      landmarkSchemaId: landmarkSchemaId || metadata?.landmarkSchemaId || null,
+      bodyRegion: bodyRegion || metadata?.bodyRegion || null,
+      primaryRequiredLandmarks: [...new Set(primaryRequiredLandmarks || metadata?.primaryRequiredLandmarks || [])],
+      stabilizerRequiredLandmarks: [...new Set(stabilizerRequiredLandmarks || metadata?.stabilizerRequiredLandmarks || [])],
+      modelInputLandmarks: [...new Set(modelInputLandmarks || metadata?.modelInputLandmarks || [])],
+      jointNames: [...new Set(jointNames || metadata?.jointNames || [])],
+      featureSchemaVersion: metadata?.featureSchemaVersion ?? MOTION_DATASET_SCHEMA_VERSION,
+    },
   };
 }
 
@@ -85,6 +126,20 @@ export function buildMotionDatasetRowFromSkeletonPayload(payload, options = {}) 
   return buildMotionDatasetRow({
     exerciseId: payload?.exercise?.id || options.exerciseId,
     label: options.label || DEFAULT_LABEL,
+    motionLabel: options.motionLabel || null,
+    suggestedLabel: options.suggestedLabel || null,
+    dataQuality: options.dataQuality || DEFAULT_DATA_QUALITY,
+    labelStatus: options.labelStatus || DEFAULT_LABEL_STATUS,
+    trainable: options.trainable === true,
+    scoreable: options.scoreable === true,
+    missingPrimary: options.missingPrimary || [],
+    missingStabilizer: options.missingStabilizer || [],
+    landmarkSchemaId: options.landmarkSchemaId || payload?.exercise?.landmarkSchemaId || payload?.flags?.landmarkSchemaId || null,
+    bodyRegion: options.bodyRegion || payload?.exercise?.bodyRegion || payload?.flags?.bodyRegion || null,
+    primaryRequiredLandmarks: options.primaryRequiredLandmarks || payload?.exercise?.primaryRequiredLandmarks || [],
+    stabilizerRequiredLandmarks: options.stabilizerRequiredLandmarks || payload?.exercise?.stabilizerRequiredLandmarks || [],
+    modelInputLandmarks: options.modelInputLandmarks || payload?.exercise?.modelInputLandmarks || [],
+    jointNames: options.jointNames || payload?.exercise?.jointNames || [],
     phaseLabels: options.phaseLabels || [],
     frames: payload?.frames || [],
     source: options.source || DEFAULT_SOURCE,

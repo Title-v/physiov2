@@ -9,6 +9,9 @@ import { jointAngleCalculator, JOINT_SPECS } from '../../../../shared/ai/JointAn
 import { ANGLE_OVERLAY_COLORS, drawAngleOverlayForJoints } from '../../../../shared/ai/AngleOverlay.js';
 import { BOUNDARY_BOX_RATIO, drawBoundaryBox, evaluateBoundaryBox } from '../../../../shared/ai/BoundaryBoxGate.js';
 import { createEmaLandmarkFilter } from '../../../../shared/ai/LandmarkFilters.js';
+import { createMotionDatasetRecorder } from '../../../../shared/ai/MotionDatasetRecorder.js';
+import { isReviewedTrainableRow, reviewDatasetRow } from '../../../../shared/ai/DatasetLabeler.js';
+import { motionDatasetRowsToJsonl } from '../../../../shared/ai/MotionDataset.js';
 import { createTherapistCaptureState, resetValidationState } from './captureState.js';
 import {
   persistReferenceForCapture,
@@ -130,11 +133,27 @@ export function mountTherapistCapture() {
   function updateBoundaryUi(boundary, prefix = '') {
     S.boundary = boundary;
     S.boundaryFrame = boundary?.nextFrame || null;
+    updateAiReadinessFromBoundary(boundary);
     if (R.poseStatus) {
       R.poseStatus.textContent = prefix ? `${prefix} · ${boundaryText(boundary)}` : boundaryText(boundary);
       R.poseStatus.className = boundaryClass(boundary);
     }
     if (R.captureBtn) R.captureBtn.disabled = !(S.cameraOn && boundary?.status === 'inside');
+  }
+
+  function updateAiReadinessFromBoundary(boundary) {
+    S.aiReadiness = {
+      schemaId: boundary?.landmarkSchemaId || getExercise(S.exId)?.landmarkSchemaId || null,
+      trainable: boundary?.trainable === true,
+      scoreable: boundary?.scoreable === true,
+      missingPrimary: boundary?.primary ? [...(boundary.primary.missing || []), ...(boundary.primary.lowVisibility || [])] : [],
+      missingStabilizer: boundary?.stabilizer ? [...(boundary.stabilizer.missing || []), ...(boundary.stabilizer.lowVisibility || [])] : [],
+      dataQuality: boundary?.dataQuality || null,
+      hint: boundary?.hint || '',
+      hintTh: boundary?.hintTh || '',
+      primary: boundary?.primary || null,
+      stabilizer: boundary?.stabilizer || null,
+    };
   }
 
   function boundaryExercise() {
@@ -301,6 +320,136 @@ export function mountTherapistCapture() {
     const stamp = exportTimestamp();
     downloadTextFile(jsonl, `physioai_dataset_${safeId}_${stamp}.jsonl`, { type: 'application/x-ndjson' });
     toast(getLang() === 'th' ? 'Export dataset JSONL แล้ว' : 'Dataset JSONL exported.');
+  }
+
+  function datasetRecorder() {
+    if (!S.dataset.recorder) {
+      const ex = getExercise(S.exId);
+      S.dataset.recorder = createMotionDatasetRecorder({
+        exercise: ex,
+        landmarkSchemaId: ex.landmarkSchemaId,
+        labelTarget: S.dataset.labelTarget,
+        targetReps: S.dataset.targetReps,
+      });
+    }
+    return S.dataset.recorder;
+  }
+
+  function setDatasetLabelTarget(value) {
+    S.dataset.labelTarget = value;
+    S.dataset.recorder = null;
+    renderPanel();
+  }
+
+  function setDatasetTargetReps(value) {
+    const n = Math.max(1, Math.min(100, Number(value) || 10));
+    S.dataset.targetReps = n;
+    S.dataset.recorder = null;
+    renderPanel();
+  }
+
+  function startDatasetRecording() {
+    const th = getLang() === 'th';
+    if (!S.cameraOn || !engine.state.ready) {
+      toast(th ? 'เปิดกล้องก่อนเก็บข้อมูล' : 'Start the camera before recording a dataset.');
+      return;
+    }
+    if (!S.aiReadiness.trainable) {
+      toast(th ? (S.aiReadiness.hintTh || 'ยังไม่พร้อมเก็บข้อมูลฝึก AI') : (S.aiReadiness.hint || 'AI training readiness is not ready.'));
+      return;
+    }
+    const recorder = datasetRecorder();
+    recorder.start();
+    S.dataset.active = true;
+    renderPanel();
+    toast(th ? 'เริ่มเก็บข้อมูลฝึก AI' : 'AI dataset recording started.');
+  }
+
+  function stopDatasetRecording() {
+    const recorder = datasetRecorder();
+    if (S.dataset.active && recorder.frames.length) {
+      const row = recorder.completeRep({ reviewed: false, suggestedLabel: S.dataset.labelTarget });
+      S.dataset.rows = recorder.rows;
+      if (row.dataQuality !== 'usable') {
+        toast(getLang() === 'th' ? `rep ถูก reject: ${row.dataQuality}` : `Rep rejected: ${row.dataQuality}`);
+      }
+    }
+    recorder.stop();
+    S.dataset.active = false;
+    S.dataset.reviewOpen = true;
+    renderPanel();
+  }
+
+  function maybeRecordDatasetFrame({ landmarks, jointAngles, boundary, snapshot, now }) {
+    if (!S.dataset.active) return;
+    const recorder = datasetRecorder();
+    recorder.pushFrame({
+      timestamp: now,
+      landmarks,
+      jointAngles,
+      boundary,
+      phase: snapshot?.phase || null,
+      safety: {
+        status: boundary?.readinessStatus,
+        dataQuality: boundary?.dataQuality,
+        schemaId: boundary?.landmarkSchemaId,
+        missingPrimary: S.aiReadiness.missingPrimary,
+        missingStabilizer: S.aiReadiness.missingStabilizer,
+      },
+    });
+    if (snapshot?.completedRep) {
+      recorder.completeRep({ reviewed: false, suggestedLabel: S.dataset.labelTarget });
+      S.dataset.rows = recorder.rows;
+      if (S.dataset.rows.length >= S.dataset.targetReps) {
+        S.dataset.active = false;
+        recorder.stop();
+        S.dataset.reviewOpen = true;
+        toast(getLang() === 'th' ? 'เก็บครบ target reps แล้ว' : 'Target reps recorded.');
+      }
+      renderPanel();
+    }
+  }
+
+  function reviewDatasetRep(index, label) {
+    try {
+      const rows = S.dataset.rows.slice();
+      rows[index] = reviewDatasetRow(rows[index], label);
+      S.dataset.rows = rows;
+      renderPanel();
+    } catch {
+      toast(getLang() === 'th' ? 'label ไม่ถูกต้อง' : 'Invalid label.');
+    }
+  }
+
+  function skipDatasetRep(index) {
+    const rows = S.dataset.rows.slice();
+    if (rows[index]) {
+      rows[index] = {
+        ...rows[index],
+        labelStatus: 'skipped',
+        trainable: false,
+        scoreable: false,
+      };
+      S.dataset.rows = rows;
+      renderPanel();
+    }
+  }
+
+  function toggleDatasetReview() {
+    S.dataset.reviewOpen = !S.dataset.reviewOpen;
+    renderPanel();
+  }
+
+  function exportDatasetBatchJsonl() {
+    const rows = (S.dataset.rows || []).filter(isReviewedTrainableRow);
+    if (!rows.length) {
+      toast(getLang() === 'th' ? 'ยังไม่มี reviewed/trainable rows ให้ export' : 'No reviewed/trainable rows to export.');
+      return;
+    }
+    const safeId = safeExportId(S.exId);
+    const stamp = exportTimestamp();
+    downloadTextFile(motionDatasetRowsToJsonl(rows), `physioai_dataset_batch_${safeId}_${stamp}.jsonl`, { type: 'application/x-ndjson' });
+    toast(getLang() === 'th' ? `Export ${rows.length} reviewed reps แล้ว` : `Exported ${rows.length} reviewed reps.`);
   }
 
   function updateClipPreviewControls() {
@@ -482,6 +631,16 @@ export function mountTherapistCapture() {
         savePlanSettings,
         togglePlan,
         updateTable,
+        setCaptureWorkflow,
+        setDatasetLabelTarget,
+        setDatasetTargetReps,
+        startDatasetRecording,
+        stopDatasetRecording,
+        reviewDatasetRep,
+        skipDatasetRep,
+        toggleDatasetReview,
+        exportDatasetBatchJsonl,
+        toggleAdvanced,
       },
     });
   }
@@ -569,6 +728,13 @@ export function mountTherapistCapture() {
     drawPrimaryAngleOverlay(ctx, frame.live, frame.liveAngles);
     updateTable(frame.liveAngles);
     maybeRecordSequenceFrame({ landmarks: frame.live, jointAngles: frame.liveAngles, boundary: frame.boundary, now: performance.now() });
+    maybeRecordDatasetFrame({
+      landmarks: frame.live,
+      jointAngles: frame.liveAngles,
+      boundary: frame.boundary,
+      snapshot: frame.snapshot,
+      now: performance.now(),
+    });
   }
 
   function drawPrimaryAngleOverlay(ctx, landmarks, liveAngles) {
@@ -686,6 +852,17 @@ export function mountTherapistCapture() {
   }
 
   // ── Actions ─────────────────────────────────────────────────
+  function setCaptureWorkflow(workflow) {
+    S.captureWorkflow = ['reference', 'dataset', 'validate'].includes(workflow) ? workflow : 'reference';
+    setMode(S.captureWorkflow === 'validate' ? 'validate' : 'setup');
+    renderPanel();
+  }
+
+  function toggleAdvanced() {
+    S.advancedOpen = !S.advancedOpen;
+    renderPanel();
+  }
+
   function setMode(m) {
     S.mode = m;
     R.modeBadge.textContent = m.toUpperCase(); R.modeBadge.className = 'pill ' + (m === 'setup' ? 'brand' : 'good');

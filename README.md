@@ -109,7 +109,9 @@ break:
 Therapist capture and Patient practice must use the same movement rules. The
 shared stack lives in `shared/` and covers:
 
-- built-in exercise metadata
+- built-in exercise templates and demo fallback metadata
+- body-region landmark schemas for AI input compatibility
+- primary + stabilizer safety/data-quality gates
 - MediaPipe / BlazePose landmark handling
 - joint angle calculation
 - boundary-box evaluation and drawing
@@ -122,23 +124,44 @@ shared stack lives in `shared/` and covers:
 
 Keep this logic route-neutral. If Therapist and Patient behavior differ, prefer
 fixing the shared implementation instead of adding separate scoring paths.
+Built-ins are starter templates only; real patient practice should come from a
+therapist-assigned plan with a compatible reference and, when available, an
+approved AI model.
 
 ## AI Model Pipeline
 
-Phase 7 dataset and TCN support is optional and fail-soft. Rule-based motion
-scoring remains authoritative when no model is available.
+PhysioAI v3 is AI-first for motion quality, with deterministic rules acting as
+safety/data-quality gates and fallback scoring. Safety always wins: missing
+primary landmarks, missing stabilizers, low visibility, out-of-frame data, or a
+model/schema mismatch blocks AI scoring and asks the user to fix camera/data
+quality.
+
+Training data must be reviewed and schema-compatible:
+
+- `labelStatus` must be `reviewed`.
+- `trainable` must be `true`.
+- `dataQuality` must be `usable`.
+- `motionLabel` must be one of `good`, `incomplete`, `wrong_path`, `unstable`.
+- `landmarkSchemaId`, primary landmarks, and stabilizer landmarks must match the
+  model manifest.
+- `out_of_frame` is a data-quality failure, not a motion-quality class.
 
 | Command | Purpose |
 | --- | --- |
 | `npm run train:tcn -- --input dataset.jsonl --dry-run` | Validate dataset JSONL and feature extraction without TensorFlow. |
-| `npm run train:tcn -- --input dataset.jsonl --out shared/models/motion-tcn` | Train a TCN in an external training environment with `@tensorflow/tfjs-node`. |
-| `npm run convert:tcn -- --from-tfjs path/to/model --out shared/models/motion-tcn` | Register an existing TensorFlow.js model and write the browser manifest. |
-| `npm run convert:tcn -- --from-keras path/to/model.keras --out shared/models/motion-tcn` | Convert a Keras model through `tensorflowjs_converter`, then write the manifest. |
+| `npm run features:tcn -- --input dataset.jsonl --out training/features/motion-features.json` | Build JS-source-of-truth sliding-window features for Keras. |
+| `npm run train:tcn:keras -- --features training/features/motion-features.json --out training/artifacts/motion-tcn.keras` | Train the Keras model in a Python training environment. |
+| `npm run evaluate:tcn:keras -- --model training/artifacts/motion-tcn.keras --features training/features/motion-features.json` | Evaluate a saved Keras model against feature JSON. |
+| `npm run train:tcn -- --input dataset.jsonl --out shared/models/motion-tcn` | Optional TFJS-node trainer for local experiments. |
+| `npm run convert:tcn -- --from-tfjs path/to/model --out shared/models/motion-tcn --landmark-schema-id right_arm.v1` | Register an existing TensorFlow.js model and write the browser manifest. |
+| `npm run convert:tcn -- --from-keras path/to/model.keras --out shared/models/motion-tcn --landmark-schema-id right_arm.v1` | Convert a Keras model through `tensorflowjs_converter`, then write the manifest. |
+| `npm run publish:tcn -- --model path/to/tfjs-model --out shared/models/motion-tcn --approve` | Publish a schema-compatible TFJS model for browser runtime. |
 
-Therapist capture can export motion clips as JSONL from `Export JSONL`. Trained
-artifacts are served from `/shared/models/motion-tcn/*` and loaded lazily by the
-shared model registry. If the manifest, model, or TFJS runtime is missing, the
-classifier returns `null` and practice continues with deterministic scoring.
+Therapist capture has a Dataset workflow for AI training readiness, label
+targets, review queue, and reviewed JSONL export. Trained artifacts are served
+from `/shared/models/motion-tcn/*` and loaded lazily by the shared model
+registry. If the manifest, model, or TFJS runtime is missing, the classifier
+returns `null` and practice falls back to deterministic scoring.
 
 ## Development Scripts
 
@@ -155,6 +178,10 @@ classifier returns `null` and practice continues with deterministic scoring.
 | `npm run verify:patient-live` | Check patient live-practice behavior. |
 | `npm run train:tcn` | Train or dry-run the optional motion TCN pipeline. |
 | `npm run convert:tcn` | Prepare/register a TensorFlow.js motion TCN model. |
+| `npm run features:tcn` | Build schema-based Keras feature JSON from reviewed JSONL. |
+| `npm run train:tcn:keras` | Train a Keras motion model from feature JSON. |
+| `npm run evaluate:tcn:keras` | Evaluate a saved Keras motion model. |
+| `npm run publish:tcn` | Publish a schema-compatible browser model. |
 
 Run the full verifier before pushing changes that touch routes, API contracts,
 shared motion logic, patient practice, or Therapist capture:

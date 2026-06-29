@@ -1,7 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { PATIENT_EXERCISES } from '../../shared/core/patient-exercises.js';
-import { createPatientAppState, clearPatientAuthMessages, resetPatientSessionData } from '../../apps/patient/patientState.js';
+import {
+  createPatientAppState,
+  clearPatientAuthMessages,
+  patientAllowsDemoExtras,
+  resetPatientSessionData,
+} from '../../apps/patient/patientState.js';
 import {
   completedPlanIdsForDate,
   escapeHtml,
@@ -41,6 +46,12 @@ test('patient state reset clears session-scoped patient data without touching au
   assert.equal(state.auth.email, 'patient@example.com');
   assert.equal(state.auth.error, '');
   assert.equal(state.auth.info, '');
+});
+
+test('patient demo extras are disabled for real logged-in patient sessions', () => {
+  assert.equal(patientAllowsDemoExtras({ session: null }), true);
+  assert.equal(patientAllowsDemoExtras({ session: { id: 'p1', email: 'patient@example.com' } }), false);
+  assert.equal(patientAllowsDemoExtras({ session: { id: 'demo', demo: true } }), true);
 });
 
 test('completedPlanIdsForDate counts only today plan sessions', () => {

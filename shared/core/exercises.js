@@ -4,7 +4,16 @@
 // `dir`: 'up' (angle increases to peak) | 'down' (decreases to peak) | 'hold' (static).
 // These are sensible defaults; a therapist Capture overrides them with a measured reference.
 
+import {
+  defaultLandmarkSchemaIdForBodyRegion,
+  landmarkSchemaMetadataForExercise,
+} from '../ai/BodyRegionLandmarkSchema.js';
+
 const DEFAULT_EXERCISE_METADATA = Object.freeze({
+  templateOnly: true,
+  landmarkSchemaId: null,
+  activeModelId: null,
+  modelStatus: 'not_trained',
   cameraOrientation: 'front',
   cameraSide: 'any',
   recommendedCameraDistanceM: [1.5, 3.0],
@@ -75,7 +84,8 @@ const EXERCISE_METADATA = {
 
 function withProductionMetadata(ex) {
   const metadata = EXERCISE_METADATA[ex.id] || {};
-  return { ...DEFAULT_EXERCISE_METADATA, ...ex, ...metadata };
+  const merged = { ...DEFAULT_EXERCISE_METADATA, ...ex, ...metadata };
+  return { ...merged, ...landmarkSchemaMetadataForExercise(merged) };
 }
 
 export const EXERCISES = [
@@ -205,7 +215,11 @@ export function updateCustomExercise(id, patch) {
   const list = readCustom();
   const idx = list.findIndex((e) => e.id === id);
   if (idx < 0) { const err = new Error('not-found'); err.code = 'not-found'; throw err; }
-  const next = { ...list[idx], ...patch, id: list[idx].id, source: 'custom' };
+  const merged = { ...list[idx], ...patch, id: list[idx].id, source: 'custom' };
+  if (!merged.landmarkSchemaId && merged.bodyRegion) {
+    merged.landmarkSchemaId = defaultLandmarkSchemaIdForBodyRegion(merged.bodyRegion);
+  }
+  const next = { ...merged, ...landmarkSchemaMetadataForExercise(merged) };
   const out = list.slice();
   out[idx] = next;
   writeCustom(out);
@@ -250,6 +264,15 @@ export function exerciseSnapshot(ex) {
     recommendedCameraHeight: ex.recommendedCameraHeight,
     requiredJoints: ex.requiredJoints,
     optionalJoints: ex.optionalJoints,
+    landmarkSchemaId: ex.landmarkSchemaId,
+    templateOnly: ex.templateOnly,
+    activeModelId: ex.activeModelId,
+    modelStatus: ex.modelStatus,
+    primaryRequiredLandmarks: ex.primaryRequiredLandmarks,
+    stabilizerRequiredLandmarks: ex.stabilizerRequiredLandmarks,
+    modelInputLandmarks: ex.modelInputLandmarks,
+    jointNames: ex.jointNames,
+    featureSchemaVersion: ex.featureSchemaVersion,
     minVisibility: ex.minVisibility,
     minUsableJointRatio: ex.minUsableJointRatio,
     minROMDeg: ex.minROMDeg,
@@ -291,6 +314,10 @@ export function saveCustomExercise({ label, bodyRegion, type = 'rep', movementPa
     id, key: id, source: 'custom', icon: 'body', accent: '#7BA88F',
     label: name, labelTh: name,
     primaryJoint, bodyRegion: region, type: hold ? 'hold' : 'rep', dir: hold ? 'hold' : 'up',
+    templateOnly: false,
+    landmarkSchemaId: defaultLandmarkSchemaIdForBodyRegion(region),
+    activeModelId: null,
+    modelStatus: 'collecting_data',
     target: hold ? 90 : 120, rest: hold ? 90 : 30,
     tol: primaryJoint.includes('elbow') || primaryJoint === 'back' || primaryJoint === 'neck' ? 12 : 15,
     reps: 10, sets: 3, holdSec: hold ? 10 : 1.5,
@@ -307,8 +334,9 @@ export function saveCustomExercise({ label, bodyRegion, type = 'rep', movementPa
     setupInstructionTh: `จัดตำแหน่งให้กล้องเห็น${name}ชัดเจน`,
     setupInstructionEn: `Set up so the camera can clearly see ${name}.`,
   };
-  writeCustom([...readCustom().filter((e) => e.id !== id), ex]);
-  return ex;
+  const withSchema = { ...ex, ...landmarkSchemaMetadataForExercise(ex) };
+  writeCustom([...readCustom().filter((e) => e.id !== id), withSchema]);
+  return withSchema;
 }
 export function deleteCustomExercise(id) {
   writeCustom(readCustom().filter((e) => e.id !== id));

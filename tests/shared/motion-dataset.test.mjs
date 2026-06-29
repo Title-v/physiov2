@@ -40,6 +40,9 @@ test('buildMotionDatasetRow creates JSONL-ready normalized frame rows', () => {
   assert.equal(row.version, MOTION_DATASET_SCHEMA_VERSION);
   assert.equal(row.exerciseId, 'shoulder');
   assert.equal(row.label, 'good_rep');
+  assert.equal(row.motionLabel, null);
+  assert.equal(row.labelStatus, 'draft');
+  assert.equal(row.trainable, false);
   assert.deepEqual(row.phaseLabels, ['rest', 'target']);
   assert.equal(row.frames[0].t, 0);
   assert.equal(row.frames[1].t, 80);
@@ -70,11 +73,26 @@ test('buildMotionDatasetRowFromSkeletonPayload maps therapist skeleton export to
 
   const row = buildMotionDatasetRowFromSkeletonPayload(payload, {
     label: 'good_rep',
+    motionLabel: 'good',
+    labelStatus: 'reviewed',
+    dataQuality: 'usable',
+    trainable: true,
+    scoreable: true,
+    landmarkSchemaId: 'right_leg.v1',
+    primaryRequiredLandmarks: ['right_hip', 'right_knee', 'right_ankle'],
+    stabilizerRequiredLandmarks: ['left_hip', 'right_shoulder'],
+    modelInputLandmarks: ['right_hip', 'right_knee', 'right_ankle', 'left_hip', 'right_shoulder'],
+    jointNames: ['right_hip', 'right_knee'],
     subjectId: 'anon_007',
   });
 
   assert.equal(row.exerciseId, 'knee');
   assert.equal(row.subjectId, 'anon_007');
+  assert.equal(row.motionLabel, 'good');
+  assert.equal(row.labelStatus, 'reviewed');
+  assert.equal(row.trainable, true);
+  assert.equal(row.landmarkSchemaId, 'right_leg.v1');
+  assert.deepEqual(row.stabilizerRequiredLandmarks, ['left_hip', 'right_shoulder']);
   assert.equal(row.metadata.schema, 'physioai.skeleton_clip.v1');
   assert.deepEqual(row.metadata.selectedRepJoints, ['right_knee']);
   assert.deepEqual(row.frames[0].angles, { right_knee: 95 });

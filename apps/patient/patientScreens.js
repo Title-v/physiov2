@@ -1,5 +1,6 @@
 import { isUsablePracticeReference } from '../../shared/ai/MotionQualityEngine.js';
 import { summaryMetrics } from '../../shared/practice/session.js';
+import { patientAllowsDemoExtras } from './patientState.js';
 import {
   overlayJointsForExercise,
   practiceAngle,
@@ -190,7 +191,8 @@ export function createPatientScreenRenderer({
     const planItems = state.plan.items || [];
     const planIds = new Set(planItems.map((item) => item.exerciseId));
     const doneCount = planItems.filter((item) => doneIds.has(item.exerciseId)).length;
-    const regularExtras = builtins.filter((ex) => !planIds.has(ex.id));
+    const showDemoExtras = patientAllowsDemoExtras(state);
+    const regularExtras = showDemoExtras ? builtins.filter((ex) => !planIds.has(ex.id)) : [];
     const name = state.session?.name || state.session?.email?.split('@')[0] || 'Guest';
     app.innerHTML = `
       <section class="phone" data-screen="home">
@@ -217,9 +219,11 @@ export function createPatientScreenRenderer({
             ? `<div class="exercise-list">${planItems.map((item) => exerciseRow(item.exercise, 'plan', doneIds.has(item.exerciseId))).join('')}</div>`
             : '<p class="empty-text">ยังไม่มีแผนจากนักกายภาพ</p>'}
 
-          <h2 class="section-title">ท่าเสริม</h2>
-          <p class="section-hint">ทำเสริมได้ · ไม่นับในการรักษา</p>
-          <div class="exercise-list">${regularExtras.map((ex) => exerciseRow(ex)).join('')}</div>
+          ${showDemoExtras ? `
+            <h2 class="section-title">ท่าเสริม</h2>
+            <p class="section-hint">โหมดเดโม · ไม่นับในการรักษา</p>
+            <div class="exercise-list">${regularExtras.map((ex) => exerciseRow(ex)).join('')}</div>
+          ` : ''}
         </div>
       </section>
     `;
