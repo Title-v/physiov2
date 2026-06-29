@@ -1,3 +1,5 @@
+import { isReviewedTrainableRow } from '../../../../shared/ai/DatasetLabeler.js';
+
 const LABELS = [
   ['good', 'Good', 'ถูกต้อง'],
   ['incomplete', 'Incomplete', 'ไม่สุดช่วง'],
@@ -29,6 +31,7 @@ export function renderDatasetRecorderPanel({
   const ready = readiness.trainable === true;
   const cameraReady = S.cameraOn === true;
   const canStart = ready && cameraReady;
+  const reviewedCount = (S.dataset.rows || []).filter(isReviewedTrainableRow).length;
   const labelSelect = h('select', {
     style: { width: '100%' },
     onchange: (e) => actions.setDatasetLabelTarget(e.target.value),
@@ -79,6 +82,12 @@ export function renderDatasetRecorderPanel({
         class: 'btn',
         onclick: actions.exportDatasetBatchJsonl,
         html: icon('download', { size: 16 }) + ' JSONL',
+      }),
+      h('button', {
+        class: 'btn',
+        disabled: reviewedCount ? null : '',
+        onclick: actions.saveDatasetBatchToApi,
+        html: icon('save', { size: 16 }) + ' API',
       })),
     h('div', { class: 'muted', style: { fontSize: '12px' } },
       lang === 'th'

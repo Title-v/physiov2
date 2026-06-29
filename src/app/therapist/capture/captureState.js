@@ -7,6 +7,8 @@ export function createTherapistCaptureState({ exerciseId, variant } = {}) {
     exId: exerciseId,
     patientId: null,
     patients: [],
+    aiModels: [],
+    aiModelsLoaded: false,
     variant,
     reference: null,
     lastVideoTime: -1,

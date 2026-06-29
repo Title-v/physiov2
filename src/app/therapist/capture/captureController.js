@@ -2,6 +2,8 @@ import { h, clear, mountNav, onLangChange, getLang, t, icon, ringSVG, toast } fr
 import { BODY_REGIONS, COUNT_MODES, EXERCISES, MOVEMENT_PATTERNS, getExercises, getExercise, exLabel, saveCustomExercise, updateCustomExercise, deleteCustomExercise } from '../../../../shared/core/exercises.js';
 import { getReference, getAllReferences, saveReference, clearReference, getPlan, savePlan, syncPatientCloudData } from '../../../../shared/core/store.js';
 import { getSettings, saveSettings } from '../../../../shared/core/store.js';
+import { apiPost } from '../../../../shared/core/api.js';
+import { exerciseWithModelManifest, fetchAiModels, selectModelManifestForExercise } from '../../../../shared/core/ai-models.js';
 import { ensureTherapist, getTherapist, logout, isGuest } from '../../../../shared/core/auth-ui.js';
 import { fetchPatients, linkPatient, createPatient } from '../../../../shared/core/patients.js';
 import { LANDMARK_NAMES, PoseLandmarker, createPoseEngine, makeDrawer, startCamera, stopCamera } from '../../../../shared/ai/PoseDetection.js';
@@ -65,6 +67,7 @@ import {
 } from './previewController.js';
 import { getValidationFrameProcessor, validationFeedbackText } from './validationController.js';
 import { prepareLiveCaptureFrameWithAi } from './captureFrame.js';
+import { saveReviewedDatasetRows } from './datasetStorage.js';
 import { renderCapturePanel } from './capturePanel.js';
 import { renderCaptureShell, renderCaptureTopbar } from './captureShell.js';
 
@@ -93,6 +96,20 @@ export function mountTherapistCapture() {
       ? preferredId
       : (S.patientId && S.patients.some((p) => p.id === S.patientId) ? S.patientId : null);
     await loadPatientData(S.patientId);
+  }
+
+  async function refreshAiModels() {
+    S.aiModels = await fetchAiModels();
+    S.aiModelsLoaded = true;
+    resetValidationEngine();
+  }
+
+  function activeModelManifestForExercise(ex = getExercise(S.exId)) {
+    return selectModelManifestForExercise(ex, S.aiModels);
+  }
+
+  function exerciseForAiRuntime(ex = getExercise(S.exId)) {
+    return exerciseWithModelManifest(ex, activeModelManifestForExercise(ex));
   }
 
   async function addPatient() {
@@ -519,6 +536,29 @@ export function mountTherapistCapture() {
     toast(getLang() === 'th' ? `Export ${rows.length} reviewed reps แล้ว` : `Exported ${rows.length} reviewed reps.`);
   }
 
+  async function saveDatasetBatchToApi() {
+    const rows = S.dataset.rows || [];
+    if (!rows.some(isReviewedTrainableRow)) {
+      toast(getLang() === 'th' ? 'ยังไม่มี reviewed/trainable rows ให้บันทึก' : 'No reviewed/trainable rows to save.');
+      return;
+    }
+    const result = await saveReviewedDatasetRows({
+      rows,
+      patientId: S.patientId,
+      postDataset: apiPost,
+    });
+    if (result.ok) {
+      toast(getLang() === 'th'
+        ? `บันทึก dataset ${result.saved} reps แล้ว`
+        : `Saved ${result.saved} dataset reps.`);
+      return;
+    }
+    console.warn('dataset_save_failed', result.errors);
+    toast(getLang() === 'th'
+      ? `บันทึกได้ ${result.saved}/${result.attempted} reps`
+      : `Saved ${result.saved}/${result.attempted} dataset reps.`);
+  }
+
   function updateClipPreviewControls() {
     clipPreviewRuntime.updateControls();
   }
@@ -708,6 +748,7 @@ export function mountTherapistCapture() {
         skipDatasetRep,
         toggleDatasetReview,
         exportDatasetBatchJsonl,
+        saveDatasetBatchToApi,
         toggleAdvanced,
       },
     });
@@ -733,7 +774,7 @@ export function mountTherapistCapture() {
       R.canvas.width = R.video.videoWidth; R.canvas.height = R.video.videoHeight;
       R.canvas.style.transform = ''; S.imageMode = false; // restore selfie-mirror after any image preview
       S.cameraOn = true; S.boundary = null; S.boundaryFrame = null;
-      S.landmarkFilter = createEmaLandmarkFilter({ minVisibility: getExercise(S.exId)?.minVisibility ?? 0.35 });
+      S.landmarkFilter = createEmaLandmarkFilter({ minVisibility: exerciseForAiRuntime()?.minVisibility ?? 0.35 });
       R.camBtn.className = 'btn danger'; R.camBtn.innerHTML = icon('close', { size: 16, color: '#FBFAF5' }) + ' ' + t('stopCamera');
       R.captureBtn.disabled = true;
       requestAnimationFrame(loop);
@@ -775,10 +816,11 @@ export function mountTherapistCapture() {
     try {
       const ctx = R.canvas.getContext('2d');
       ctx.clearRect(0, 0, R.canvas.width, R.canvas.height);
+      const exercise = exerciseForAiRuntime();
       const frame = await prepareLiveCaptureFrameWithAi({
         rawLandmarks: res?.landmarks?.[0] || null,
         landmarkFilter: S.landmarkFilter,
-        exercise: getExercise(S.exId),
+        exercise,
         reference: S.reference,
         mode: S.mode,
         previousBoundaryFrame: S.boundaryFrame,
@@ -796,7 +838,7 @@ export function mountTherapistCapture() {
         if (frame.ghostLandmarks) drawer(frame.ghostLandmarks, { ghost: true });
         updateScore(frame.snapshot.overallScore, validationFeedbackText(frame.snapshot, frame.snapshot.cue?.text, { lang: getLang() }));
       } else if (frame.validationUnavailable) {
-        updateScore(null, currentCaptureHint(getExercise(S.exId)));
+        updateScore(null, currentCaptureHint(exercise));
       } else updateScore(null);
       drawer(frame.live, { color: frame.colors[0], accent: frame.colors[1] });
       drawBoundaryBox(ctx, frame.boundary);
@@ -955,7 +997,7 @@ export function mountTherapistCapture() {
   }
 
   function validationProcessorFor(ex, ref) {
-    return getValidationFrameProcessor(S, ex, ref, {
+    return getValidationFrameProcessor(S, exerciseForAiRuntime(ex), ref, {
       fallbackExerciseId: S.exId,
       lang: getLang,
     });
@@ -1246,6 +1288,14 @@ export function mountTherapistCapture() {
       toast(getLang() === 'th' ? 'โหลดรายชื่อผู้ป่วยไม่สำเร็จ' : 'Could not load patients');
       S.patients = [];
       S.patientId = null;
+    }
+    try {
+      await refreshAiModels();
+    } catch {
+      if (disposed) return;
+      S.aiModels = [];
+      S.aiModelsLoaded = false;
+      toast(getLang() === 'th' ? 'โหลด metadata โมเดล AI ไม่สำเร็จ' : 'Could not load AI model metadata');
     }
     if (disposed) return;
     render();

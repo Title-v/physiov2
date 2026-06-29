@@ -12,10 +12,40 @@ function hasSchemaMetadata(exercise = {}) {
       .every((key) => Array.isArray(exercise[key]) && exercise[key].length);
 }
 
-function modelIsReady(exercise = {}, modelManifest = null) {
+export function modelReadinessForExercise(exercise = {}, modelManifest = null) {
   const schemaId = exercise.landmarkSchemaId || null;
-  if (modelManifest) return modelManifest.approved === true && modelManifest.landmarkSchemaId === schemaId;
-  return !!exercise.activeModelId && exercise.modelStatus === 'deployed';
+  const configured = !!exercise.activeModelId && exercise.modelStatus === 'deployed';
+  if (!modelManifest) {
+    return {
+      configured,
+      manifestLoaded: false,
+      approved: false,
+      schemaMatches: false,
+      idMatches: null,
+      ready: false,
+      reason: configured ? 'manifest_not_loaded' : (exercise.modelStatus || 'not_trained'),
+    };
+  }
+  const manifestId = modelManifest.id || modelManifest.modelId || modelManifest.name || null;
+  const idMatches = !exercise.activeModelId || manifestId === exercise.activeModelId;
+  const approved = modelManifest.approved === true;
+  const schemaMatches = !!schemaId && modelManifest.landmarkSchemaId === schemaId;
+  const ready = approved && schemaMatches && idMatches;
+  return {
+    configured,
+    manifestLoaded: true,
+    approved,
+    schemaMatches,
+    idMatches,
+    ready,
+    reason: ready
+      ? 'model_ready'
+      : !approved
+        ? 'model_not_approved'
+        : !schemaMatches
+          ? 'schema_mismatch'
+          : 'model_id_mismatch',
+  };
 }
 
 function stepStatus({ ready = false, blocked = false, active = false } = {}) {
@@ -37,7 +67,8 @@ export function buildAiExerciseWizardModel({
   const dataset = evaluateDatasetReadiness(datasetRows);
   const reviewedTrainableRows = dataset.trainableRows || 0;
   const enoughDataset = dataset.ok;
-  const modelReady = modelIsReady(exercise, modelManifest);
+  const modelStatus = modelReadinessForExercise(exercise, modelManifest);
+  const modelReady = modelStatus.ready;
   const safetyReady = readiness.trainable === true || readiness.scoreable === true;
   const steps = [
     {
@@ -73,7 +104,7 @@ export function buildAiExerciseWizardModel({
         blocked: !enoughDataset,
         active: enoughDataset,
       }),
-      detail: modelReady ? (exercise.activeModelId || modelManifest?.name || 'approved') : (exercise.modelStatus || 'not_trained'),
+      detail: modelReady ? (exercise.activeModelId || modelManifest?.name || 'approved') : modelStatus.reason,
     },
     {
       id: 'validate',
@@ -96,6 +127,7 @@ export function buildAiExerciseWizardModel({
     modelReady,
     safetyReady,
     dataset,
+    modelStatus,
     reviewedTrainableRows,
     steps,
     nextStep,

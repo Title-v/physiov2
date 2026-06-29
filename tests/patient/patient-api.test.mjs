@@ -39,6 +39,29 @@ test('normalizePlan attaches normalized exercises and references', () => {
   assert.equal(plan.items[1].exercise.source, 'custom');
 });
 
+test('normalizePlan preserves active AI model metadata from therapist plan snapshot', () => {
+  const plan = normalizePlan({
+    items: [{
+      exercise: {
+        id: 'custom_ai',
+        title: 'Custom reach',
+        source: 'custom',
+        bodyRegion: 'right_arm',
+        landmarkSchemaId: 'right_arm.v1',
+        activeModelId: 'right_arm_tcn_v1',
+        modelStatus: 'deployed',
+        modelBaseUrl: '/shared/models/right_arm_tcn_v1',
+      },
+      reps: 5,
+      sets: 2,
+    }],
+  });
+
+  assert.equal(plan.items[0].exercise.activeModelId, 'right_arm_tcn_v1');
+  assert.equal(plan.items[0].exercise.modelStatus, 'deployed');
+  assert.equal(plan.items[0].exercise.modelBaseUrl, '/shared/models/right_arm_tcn_v1');
+});
+
 test('normalizeSessions converts persisted endedAt values to milliseconds', () => {
   assert.equal(toMs('1970-01-01T00:00:02.000Z'), 2000);
   assert.equal(toMs(3000), 3000);

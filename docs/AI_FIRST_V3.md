@@ -41,9 +41,12 @@ repo-native terms.
 - Keras evaluation prefers the held-out validation split when present, and
   publishing refuses approval from reports that explicitly evaluate all samples.
 - Therapist Capture Dataset workflow panels for readiness, recording, review,
-  and reviewed JSONL export.
+  reviewed JSONL export, and `/datasets` API save.
 - Therapist Capture AI exercise setup now derives an actionable step model:
   schema, reference, dataset readiness, model deployment, and validation.
+- Therapist Capture model readiness distinguishes deployed candidates from
+  manifest-verified compatible models; a manifest schema/id mismatch blocks the
+  model-ready step.
 - Therapist Capture validation can run the shared motion processor with the
   deployed model classifier when a compatible model is available.
 - Patient home is plan-first for real sessions; built-in extras are demo-only.
@@ -52,7 +55,15 @@ repo-native terms.
 - Practice session payloads are version 3 and include `scoreSource` plus
   AI-quality score breakdown fields.
 - `/datasets` and `/ai-models` routes persist reviewed dataset rows and model
-  manifest metadata through the shared API/Supabase runtime.
+  manifest metadata through the shared API/Supabase runtime. Capture only posts
+  rows that pass the same reviewed/trainable gate used by JSONL export.
+- Therapist Capture loads `/ai-models` metadata and selects the active or latest
+  approved schema-compatible manifest for the selected exercise before marking
+  model validation as ready.
+- Therapist Plan Builder also loads `/ai-models` and embeds verified model
+  metadata into custom exercise snapshots in patient plans, so the Patient app
+  can load the compatible deployed model without direct access to therapist-only
+  model endpoints.
 
 ## Runtime Policy
 
@@ -69,6 +80,7 @@ AI model use requires:
 ```txt
 manifest.approved === true
 exercise.landmarkSchemaId === manifest.landmarkSchemaId
+exercise.activeModelId === manifest.id/modelId/name when an active id is set
 confidence >= threshold
 ```
 
@@ -100,5 +112,5 @@ finalScore = referenceRuleScore
 - Convert/publish a real trained TFJS model and validate it in browser.
 - Tune dataset minimums, approval thresholds, and AI confidence using real
   recorded patient/therapist data.
-- Move from local JSONL/export-driven training to an operational training job
-  when deployment requirements are clear.
+- Move from local JSONL/API-saved datasets to an operational training job when
+  deployment requirements are clear.

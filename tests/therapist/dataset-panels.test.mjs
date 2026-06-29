@@ -29,6 +29,7 @@ test('dataset recorder disables start until primary and stabilizer readiness pas
     startDatasetRecording() {},
     stopDatasetRecording() {},
     exportDatasetBatchJsonl() {},
+    saveDatasetBatchToApi() {},
   };
   const panel = renderDatasetRecorderPanel({
     S: {
@@ -61,6 +62,7 @@ test('dataset recorder enables start when AI training readiness is trainable', (
     startDatasetRecording() {},
     stopDatasetRecording() {},
     exportDatasetBatchJsonl() {},
+    saveDatasetBatchToApi() {},
   };
   const panel = renderDatasetRecorderPanel({
     S: {
@@ -92,6 +94,7 @@ test('dataset recorder keeps start disabled until camera is on', () => {
     startDatasetRecording() {},
     stopDatasetRecording() {},
     exportDatasetBatchJsonl() {},
+    saveDatasetBatchToApi() {},
   };
   const panel = renderDatasetRecorderPanel({
     S: {
@@ -113,6 +116,64 @@ test('dataset recorder keeps start disabled until camera is on', () => {
 
   assert.equal(start.props.disabled, '');
   assert.match(textOf(panel), /Start the camera before recording an AI dataset/);
+});
+
+test('dataset recorder enables API save only for reviewed trainable rows', () => {
+  const saves = [];
+  const readyRow = {
+    labelStatus: 'reviewed',
+    trainable: true,
+    dataQuality: 'usable',
+    motionLabel: 'good',
+    landmarkSchemaId: 'right_arm.v1',
+    missingPrimary: [],
+    missingStabilizer: [],
+  };
+  const actions = {
+    setDatasetLabelTarget() {},
+    setDatasetTargetReps() {},
+    startDatasetRecording() {},
+    stopDatasetRecording() {},
+    exportDatasetBatchJsonl() {},
+    saveDatasetBatchToApi: () => saves.push('save'),
+  };
+  const baseState = {
+    cameraOn: true,
+    aiReadiness: {
+      trainable: true,
+      dataQuality: 'usable',
+      schemaId: 'right_arm.v1',
+      primary: { names: ['right_shoulder'], missing: [], lowVisibility: [] },
+      stabilizer: { names: ['left_shoulder'], missing: [], lowVisibility: [] },
+    },
+  };
+  const draftPanel = renderDatasetRecorderPanel({
+    S: {
+      ...baseState,
+      dataset: { active: false, labelTarget: 'good', targetReps: 10, rows: [{ labelStatus: 'draft', trainable: false }] },
+    },
+    h,
+    icon,
+    actions,
+  });
+  const disabledSave = findAll(draftPanel, (node) => node.tag === 'button' && /API/.test(textOf(node)))[0];
+
+  assert.equal(disabledSave.props.disabled, '');
+
+  const readyPanel = renderDatasetRecorderPanel({
+    S: {
+      ...baseState,
+      dataset: { active: false, labelTarget: 'good', targetReps: 10, rows: [readyRow] },
+    },
+    h,
+    icon,
+    actions,
+  });
+  const save = findAll(readyPanel, (node) => node.tag === 'button' && /API/.test(textOf(node)))[0];
+
+  assert.equal(save.props.disabled, null);
+  save.props.onclick();
+  assert.deepEqual(saves, ['save']);
 });
 
 test('dataset review disables motion-label buttons for auto rejected reps', () => {

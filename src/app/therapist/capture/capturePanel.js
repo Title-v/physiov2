@@ -4,6 +4,7 @@ import { renderDatasetRecorderPanel } from './datasetRecorderPanel.js';
 import { renderDatasetReviewPanel } from './datasetReviewPanel.js';
 import { renderAiExerciseWizard } from './aiExerciseWizard.js';
 import { renderModelValidationPanel } from './modelValidationPanel.js';
+import { exerciseWithModelManifest, selectModelManifestForExercise } from '../../../../shared/core/ai-models.js';
 
 export function renderCapturePanel({
   state: S,
@@ -67,12 +68,15 @@ export function renderCapturePanel({
     skipDatasetRep,
     toggleDatasetReview,
     exportDatasetBatchJsonl,
+    saveDatasetBatchToApi,
     toggleAdvanced,
   } = actions;
 
   loadRef();
   const panel = document.getElementById('panel'); if (!panel) return; clear(panel);
-  const ex = getExercise(S.exId);
+  const baseExercise = getExercise(S.exId);
+  const activeModelManifest = selectModelManifestForExercise(baseExercise, S.aiModels);
+  const ex = exerciseWithModelManifest(baseExercise, activeModelManifest);
   const lang = getLang();
   if (S.captureDraft?.exerciseId !== S.exId) S.captureDraft = null;
   if (S.pendingSequence?.exerciseId !== S.exId) {
@@ -302,6 +306,7 @@ export function renderCapturePanel({
       startDatasetRecording,
       stopDatasetRecording,
       exportDatasetBatchJsonl,
+      saveDatasetBatchToApi,
     },
   });
   const datasetReview = renderDatasetReviewPanel({
@@ -318,12 +323,13 @@ export function renderCapturePanel({
   const workflowPanels = S.captureWorkflow === 'dataset'
     ? [datasetRecorder, datasetReview]
     : S.captureWorkflow === 'validate'
-      ? [renderModelValidationPanel({ exercise: ex, reference: S.reference, readiness: S.aiReadiness, h, lang }), scoreCard, table]
+      ? [renderModelValidationPanel({ exercise: ex, reference: S.reference, readiness: S.aiReadiness, modelManifest: activeModelManifest, h, lang }), scoreCard, table]
       : [renderAiExerciseWizard({
         exercise: ex,
         reference: S.reference,
         datasetRows: S.dataset.rows || [],
         readiness: S.aiReadiness,
+        modelManifest: activeModelManifest,
         h,
         lang,
         actions: { setCaptureWorkflow },

@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   buildAiExerciseWizardModel,
+  modelReadinessForExercise,
   renderAiExerciseWizard,
 } from '../../src/app/therapist/capture/aiExerciseWizard.js';
 import {
@@ -108,11 +109,68 @@ test('AI exercise wizard marks validation ready only when deployed model and cam
     reference: { kind: 'motion_cycle' },
     datasetRows: recommendedRows(),
     readiness: { trainable: true, scoreable: true, dataQuality: 'usable' },
+    modelManifest: {
+      id: 'right_arm_tcn_v1',
+      approved: true,
+      landmarkSchemaId: 'right_arm.v1',
+    },
   });
 
   assert.equal(model.modelReady, true);
   assert.equal(model.steps.find((step) => step.id === 'model').status, 'done');
   assert.equal(model.steps.find((step) => step.id === 'validate').status, 'done');
+});
+
+test('AI exercise wizard blocks deployed model when manifest schema is incompatible', () => {
+  const incompatible = buildAiExerciseWizardModel({
+    exercise: exercise({ activeModelId: 'right_arm_tcn_v1', modelStatus: 'deployed' }),
+    reference: { kind: 'motion_cycle' },
+    datasetRows: recommendedRows(),
+    readiness: { trainable: true, scoreable: true, dataQuality: 'usable' },
+    modelManifest: {
+      id: 'right_arm_tcn_v1',
+      approved: true,
+      landmarkSchemaId: 'right_leg.v1',
+    },
+  });
+  const compatible = buildAiExerciseWizardModel({
+    exercise: exercise({ activeModelId: 'right_arm_tcn_v1', modelStatus: 'deployed' }),
+    reference: { kind: 'motion_cycle' },
+    datasetRows: recommendedRows(),
+    readiness: { trainable: true, scoreable: true, dataQuality: 'usable' },
+    modelManifest: {
+      id: 'right_arm_tcn_v1',
+      approved: true,
+      landmarkSchemaId: 'right_arm.v1',
+    },
+  });
+
+  assert.equal(incompatible.modelReady, false);
+  assert.equal(incompatible.modelStatus.reason, 'schema_mismatch');
+  assert.equal(incompatible.steps.find((step) => step.id === 'model').status, 'active');
+  assert.equal(compatible.modelReady, true);
+  assert.equal(compatible.modelStatus.reason, 'model_ready');
+});
+
+test('modelReadinessForExercise distinguishes deployed candidate from verified manifest', () => {
+  const candidate = modelReadinessForExercise(exercise({
+    activeModelId: 'right_arm_tcn_v1',
+    modelStatus: 'deployed',
+  }));
+  const wrongId = modelReadinessForExercise(exercise({
+    activeModelId: 'right_arm_tcn_v1',
+    modelStatus: 'deployed',
+  }), {
+    id: 'other_model',
+    approved: true,
+    landmarkSchemaId: 'right_arm.v1',
+  });
+
+  assert.equal(candidate.ready, false);
+  assert.equal(candidate.manifestLoaded, false);
+  assert.equal(candidate.reason, 'manifest_not_loaded');
+  assert.equal(wrongId.ready, false);
+  assert.equal(wrongId.reason, 'model_id_mismatch');
 });
 
 test('renderAiExerciseWizard exposes workflow actions for reachable steps', () => {
