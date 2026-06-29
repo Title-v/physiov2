@@ -1,0 +1,131 @@
+export const API_CONTRACT_VERSION = 'physioai.api.v1';
+
+export const API_ENDPOINTS = [
+  {
+    method: 'GET',
+    path: '/health',
+    auth: false,
+    roles: [],
+    response: '{ name: string, status: "ok" }',
+  },
+  {
+    method: 'POST',
+    path: '/auth/register',
+    auth: false,
+    roles: [],
+    body: '{ name, email, password, role? }',
+    response: '{ token, user } or email_confirmation_required',
+  },
+  {
+    method: 'POST',
+    path: '/auth/resend-verification',
+    auth: false,
+    roles: [],
+    body: '{ email }',
+    response: '{ ok: true }',
+  },
+  {
+    method: 'POST',
+    path: '/auth/login',
+    auth: false,
+    roles: [],
+    body: '{ email, password }',
+    response: '{ token, user }',
+  },
+  {
+    method: 'GET',
+    path: '/auth/me',
+    auth: true,
+    roles: ['patient', 'therapist'],
+    response: '{ user }',
+  },
+  {
+    method: 'GET',
+    path: '/patients',
+    auth: true,
+    roles: ['therapist'],
+    response: '[{ id, name, email? }]',
+  },
+  {
+    method: 'POST',
+    path: '/patients/link',
+    auth: true,
+    roles: ['therapist'],
+    body: '{ email } or { patientId }',
+    response: '{ id, name, email? }',
+  },
+  {
+    method: 'POST',
+    path: '/patients',
+    auth: true,
+    roles: ['therapist'],
+    body: '{ name, email, password }',
+    response: '{ id, name, email?, verificationRequired? }',
+  },
+  {
+    method: 'GET',
+    path: '/plans',
+    auth: true,
+    roles: ['patient', 'therapist'],
+    query: 'patientId? for therapist access',
+    response: '{ patientId, items, updatedAt? }',
+  },
+  {
+    method: 'PUT',
+    path: '/plans',
+    auth: true,
+    roles: ['patient', 'therapist'],
+    query: 'patientId? for therapist access',
+    body: 'plan document',
+    response: 'saved plan document',
+  },
+  {
+    method: 'GET',
+    path: '/references',
+    auth: true,
+    roles: ['patient', 'therapist'],
+    query: 'patientId? for therapist access',
+    response: '[reference document]',
+  },
+  {
+    method: 'POST',
+    path: '/references',
+    auth: true,
+    roles: ['patient', 'therapist'],
+    query: 'patientId? for therapist access',
+    body: '{ exerciseId, ...reference }',
+    response: 'saved reference document',
+  },
+  {
+    method: 'DELETE',
+    path: '/references',
+    auth: true,
+    roles: ['patient', 'therapist'],
+    query: 'patientId?, exerciseId',
+    body: '{ exerciseId } also accepted',
+    response: '204 no content',
+  },
+  {
+    method: 'GET',
+    path: '/sessions',
+    auth: true,
+    roles: ['patient', 'therapist'],
+    query: 'patientId? for therapist access',
+    response: '[session document]',
+  },
+  {
+    method: 'POST',
+    path: '/sessions',
+    auth: true,
+    roles: ['patient', 'therapist'],
+    query: 'patientId? for therapist access',
+    body: 'session document',
+    response: '201 saved session document',
+  },
+];
+
+export function endpointKey(endpoint) {
+  return `${endpoint.method.toUpperCase()} ${endpoint.path}`;
+}
+
+export const API_ENDPOINT_KEYS = API_ENDPOINTS.map(endpointKey);

@@ -1,0 +1,31 @@
+{
+  "name": "physioai-web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "test": "node --test tests/**/*.test.mjs",
+    "verify": "npm run test && npm run verify:api && npm run verify:static && npm run verify:motion && npm run verify:patient-live",
+    "verify:api": "node scripts/verify-api-contract.mjs && node scripts/verify-api-core.mjs && node scripts/verify-api-request.mjs && node scripts/verify-api-auth-context.mjs && node scripts/verify-api-auth-routes.mjs && node scripts/verify-api-data-routes.mjs && node scripts/verify-api-supabase-runtime.mjs && node scripts/verify-next-api-routes.mjs && node scripts/verify-next-auth-routes.mjs && node scripts/verify-next-data-routes.mjs",
+    "verify:static": "node scripts/verify-next-static-routes.mjs",
+    "verify:motion": "node scripts/verify-motion-quality-engine.mjs",
+    "verify:patient-live": "node scripts/verify-patient-live-practice.mjs",
+    "supabase:login": "npx supabase login",
+    "supabase:link": "npx supabase link --project-ref hptkdtzrhotmasznecwj",
+    "supabase:push": "npx supabase db push --linked",
+    "supabase:push:dry": "npx supabase db push --linked --dry-run",
+    "supabase:advisors": "npx supabase db advisors --linked"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "2.108.2",
+    "next": "16.2.6",
+    "react": "19.2.4",
+    "react-dom": "19.2.4"
+  },
+  "devDependencies": {
+    "supabase": "2.108.0"
+  }
+}
