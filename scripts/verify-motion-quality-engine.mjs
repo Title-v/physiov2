@@ -12,6 +12,14 @@ function check(name, pass, detail = null) {
 const inside = { status: 'inside' };
 const outside = { status: 'outside' };
 
+function aiReadyExercise(exercise) {
+  return {
+    ...exercise,
+    activeModelId: 'motion-tcn',
+    modelStatus: 'deployed',
+  };
+}
+
 function motionReference() {
   return {
     kind: REFERENCE_KINDS.MOTION_CYCLE,
@@ -202,7 +210,8 @@ check('rest-target-rest counts one rep', validSummary.reps === 1, validSummary);
 check('clean rep is valid', validSummary.validReps === 1 && validSummary.invalidRepCount === 0, validSummary);
 check('summary exposes score fields', Number.isFinite(validSummary.overallScore) && Number.isFinite(validSummary.avgTargetReachScore), validSummary);
 
-const aiFusionEngine = createMotionQualityEngine({ exercise, reference, dose: { reps: 1, sets: 1 } });
+const aiExercise = aiReadyExercise(exercise);
+const aiFusionEngine = createMotionQualityEngine({ exercise: aiExercise, reference, dose: { reps: 1, sets: 1 } });
 pushAngles(
   aiFusionEngine,
   [20, 20, 60, 95, 120, 120, 80, 45, 20, 20],
@@ -213,7 +222,12 @@ pushAngles(
   { phase: 'moving_to_target', quality: 'wrong_path', confidence: 0.9 },
 );
 const aiFusionSummary = aiFusionEngine.finishSummary();
-check('high-confidence AI wrong_path can invalidate a rep assistively', aiFusionSummary.invalidReasons.ai_wrong_path === 1, aiFusionSummary);
+check(
+  'high-confidence AI wrong_path can invalidate a rep assistively',
+  aiFusionSummary.invalidReasons.ai_wrong_path === 1 &&
+    aiFusionSummary.repSummaries[0]?.overallScore === Math.round(40 * 0.85 + aiFusionSummary.repSummaries[0].ruleOverallScore * 0.15),
+  aiFusionSummary,
+);
 
 const incompleteEngine = createMotionQualityEngine({ exercise, reference, dose: { reps: 1, sets: 1 } });
 pushAngles(incompleteEngine, [20, 20, 50, 70, 80, 70, 40, 20, 20]);
@@ -224,12 +238,26 @@ const badBoundaryEngine = createMotionQualityEngine({ exercise, reference, dose:
 pushAngles(badBoundaryEngine, [20, 20, 60, 95, 120, 120, 80, 45, 20, 20], outside);
 const badBoundarySummary = badBoundaryEngine.finishSummary();
 check('completed out-of-frame rep counts', badBoundarySummary.reps === 1, badBoundarySummary);
-check('completed out-of-frame rep is invalid', badBoundarySummary.invalidRepCount === 1 && badBoundarySummary.invalidReasons.out_of_frame === 1, badBoundarySummary);
+check(
+  'completed out-of-frame rep is invalid and unscoreable',
+  badBoundarySummary.invalidRepCount === 1 &&
+    badBoundarySummary.invalidReasons.out_of_frame === 1 &&
+    badBoundarySummary.scoreable === false &&
+    badBoundarySummary.overallScore === null,
+  badBoundarySummary,
+);
 
 const lowVisibilityEngine = createMotionQualityEngine({ exercise, reference, dose: { reps: 1, sets: 1 } });
 pushAngles(lowVisibilityEngine, [20, 20, 60, 95, 120, 120, 80, 45, 20, 20], inside, 5000, 160, { usableJoints: [], usableJointRatio: 0 });
 const lowVisibilitySummary = lowVisibilityEngine.finishSummary();
-check('completed low-visibility rep is invalid', lowVisibilitySummary.invalidRepCount === 1 && lowVisibilitySummary.invalidReasons.low_visibility === 1, lowVisibilitySummary);
+check(
+  'completed low-visibility rep is invalid and unscoreable',
+  lowVisibilitySummary.invalidRepCount === 1 &&
+    lowVisibilitySummary.invalidReasons.low_visibility === 1 &&
+    lowVisibilitySummary.scoreable === false &&
+    lowVisibilitySummary.overallScore === null,
+  lowVisibilitySummary,
+);
 
 const wrongPathEngine = createMotionQualityEngine({
   exercise: { id: 'shoulder_path', type: 'rep', primaryJoint: 'right_shoulder', reps: 1, sets: 1 },

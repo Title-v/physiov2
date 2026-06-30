@@ -71,7 +71,7 @@ Safety always gates scoring:
 
 ```txt
 missing primary/stabilizer, low visibility, out of frame, or schema mismatch
-→ no AI score
+→ no AI score and no final score for that frame/rep (`scoreable: false`)
 → show camera/data-quality guidance
 ```
 
@@ -104,6 +104,8 @@ When AI is unavailable or low confidence:
 
 ```txt
 finalScore = referenceRuleScore
+finalReason = "ai_low_confidence_or_missing_model"
+aiQualityScore = null
 ```
 
 ## Remaining Work

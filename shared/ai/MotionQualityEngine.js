@@ -73,6 +73,87 @@ const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 const round = (value) => Number.isFinite(value) ? Math.round(value) : null;
 const scoreClamp = (value) => round(clamp(value, 0, 100));
 const isInside = (boundary) => boundary?.status === 'inside';
+const AI_FALLBACK_REASON = 'ai_low_confidence_or_missing_model';
+
+function aiModelApprovedForScoring(exercise = {}, thresholds = {}) {
+  if (thresholds.modelApproved != null) return thresholds.modelApproved === true;
+  if (thresholds.approved != null) return thresholds.approved === true;
+  if (exercise.modelApproved === true || exercise.aiModelApproved === true) return true;
+  if (exercise.modelManifest?.approved === true) return true;
+  return !!exercise.activeModelId && exercise.modelStatus === 'deployed';
+}
+
+function unscoreableReasonFromBoundary(boundary, fallback = 'out_of_frame') {
+  const reason = boundary?.dataQuality || boundary?.readinessStatus || boundary?.reason || boundary?.status || fallback;
+  if (reason === 'outside') return 'out_of_frame';
+  return reason === 'usable' || reason === 'inside' ? fallback : reason;
+}
+
+function frameSafetyStatus({
+  hasPose = true,
+  boundary = null,
+  visibleJointRatio = 1,
+  minVisibleRatio = 0,
+} = {}) {
+  if (!hasPose) return { ok: false, reason: 'no_pose' };
+  if (boundary?.scoreable === false || boundary?.ok === false) {
+    return { ok: false, reason: unscoreableReasonFromBoundary(boundary) };
+  }
+  if (boundary?.status && boundary.status !== 'inside') {
+    return { ok: false, reason: unscoreableReasonFromBoundary(boundary, 'out_of_frame') };
+  }
+  if (Number.isFinite(visibleJointRatio) && visibleJointRatio < minVisibleRatio) {
+    return { ok: false, reason: 'low_visibility' };
+  }
+  return { ok: true, reason: null };
+}
+
+function repSafetyStatus(frames, {
+  boundaryInsideRatio,
+  visibleJointRatio,
+  minBoundaryInsideRatio,
+  minVisibleJointRatio,
+} = {}) {
+  if (boundaryInsideRatio < minBoundaryInsideRatio) {
+    return {
+      ok: false,
+      reason: frames.find((frame) => frame.safetyReason)?.safetyReason || 'out_of_frame',
+    };
+  }
+  if (visibleJointRatio < minVisibleJointRatio) {
+    return {
+      ok: false,
+      reason: frames.find((frame) => frame.safetyReason === 'low_visibility')?.safetyReason || 'low_visibility',
+    };
+  }
+  return { ok: true, reason: null };
+}
+
+function scoreByAiPrimaryPolicy(ruleScore, aiSummary, thresholds, safety) {
+  if (!safety?.ok) {
+    return {
+      finalScore: null,
+      scoreable: false,
+      finalReason: safety?.reason || 'data_quality_not_scoreable',
+      scoreSource: 'safety',
+    };
+  }
+  const aiScoreable = aiSummary?.scoreable && Number.isFinite(aiSummary.avgAiQualityScore);
+  if (aiScoreable) {
+    return {
+      finalScore: fuseAiPrimaryScore(ruleScore, aiSummary, thresholds),
+      scoreable: true,
+      finalReason: null,
+      scoreSource: 'ai_primary',
+    };
+  }
+  return {
+    finalScore: Number.isFinite(ruleScore) ? scoreClamp(ruleScore) : null,
+    scoreable: Number.isFinite(ruleScore),
+    finalReason: AI_FALLBACK_REASON,
+    scoreSource: 'rule_fallback',
+  };
+}
 
 function mean(values) {
   const list = values.filter((value) => Number.isFinite(value));
@@ -337,17 +418,29 @@ function aggregateReps(repSummaries, dose = {}) {
   const validReps = repSummaries.filter((rep) => rep.valid).length;
   const invalidRepCount = reps - validReps;
   const avg = (key) => scoreClamp(mean(repSummaries.map((rep) => rep[key])) ?? 0);
-  const repOverallScores = repSummaries.map((rep) => rep.overallScore).filter(Number.isFinite);
-  const avgRepQualityScore = scoreClamp(mean(repOverallScores) ?? 0);
+  const avgNullable = (key) => {
+    const value = mean(repSummaries.map((rep) => rep[key]));
+    return value == null ? null : scoreClamp(value);
+  };
+  const repOverallScores = repSummaries
+    .filter((rep) => rep.scoreable !== false)
+    .map((rep) => rep.overallScore)
+    .filter(Number.isFinite);
+  const hasScoreableReps = repOverallScores.length > 0;
+  const scoreable = reps === 0 || hasScoreableReps;
+  const avgRepQualityScore = hasScoreableReps ? scoreClamp(mean(repOverallScores)) : (reps ? null : 0);
   const prescribedReps = Math.max(1, Number(dose.reps) || Number(dose.targetReps) || reps || 1);
   const prescribedSets = Math.max(1, Number(dose.sets) || 1);
   const completionScore = scoreClamp((reps / (prescribedReps * prescribedSets)) * 100);
-  const consistencyScore = scoreClamp(100 - stdDev(repOverallScores));
-  const overallScore = scoreClamp(
-    avgRepQualityScore * 0.75 +
-    completionScore * 0.15 +
-    consistencyScore * 0.10,
-  );
+  const consistencyScore = hasScoreableReps ? scoreClamp(100 - stdDev(repOverallScores)) : (reps ? null : 100);
+  const overallScore = scoreable
+    ? scoreClamp(
+      (avgRepQualityScore ?? 0) * 0.75 +
+      completionScore * 0.15 +
+      (consistencyScore ?? 0) * 0.10,
+    )
+    : null;
+  const finalReason = scoreable ? null : repSummaries.find((rep) => rep.scoreable === false)?.finalReason || 'data_quality_not_scoreable';
   return {
     type: 'rep',
     reps,
@@ -355,6 +448,8 @@ function aggregateReps(repSummaries, dose = {}) {
     invalidRepCount,
     overallScore,
     avgScore: overallScore,
+    scoreable,
+    finalReason,
     avgRepQualityScore,
     completionScore,
     consistencyScore,
@@ -364,7 +459,7 @@ function aggregateReps(repSummaries, dose = {}) {
     avgBoundaryScore: avg('boundaryScore'),
     avgVisibilityScore: avg('visibilityScore'),
     avgTempoScore: avg('tempoScore'),
-    avgAiQualityScore: avg('aiQualityScore'),
+    avgAiQualityScore: avgNullable('aiQualityScore'),
     aiSignalCounts: mergeCounts(...repSummaries.map((rep) => rep.aiSignalCounts)),
     invalidReasons: countReasons(repSummaries),
     repSummaries,
@@ -386,6 +481,7 @@ function frameTimestamp(input) {
 
 function assessAiSignal(aiSignal, thresholds) {
   if (!thresholds.enabled || !aiSignal) return null;
+  if (thresholds.modelApproved !== true) return null;
   const confidence = Number(aiSignal.confidence);
   if (!Number.isFinite(confidence) || confidence < thresholds.minConfidence) return null;
   if (thresholds.qualityScores[aiSignal.quality] == null) return null;
@@ -454,6 +550,7 @@ export function createMotionQualityEngine({
       ...(thresholds.ai?.reasonByQuality || {}),
     },
   };
+  aiThresholds.modelApproved = aiModelApprovedForScoring(exercise, aiThresholds);
   const joints = knownJointsFrom(ref, exercise);
 
   let phase = kind === REFERENCE_KINDS.HOLD_POSE ? 'holding' : 'waiting_rest';
@@ -519,22 +616,36 @@ export function createMotionQualityEngine({
       boundaryScore * motionThresholds.weights.boundary +
       tempoScore * motionThresholds.weights.tempo,
     );
-    const overallScore = fuseAiPrimaryScore(ruleOverallScore, aiSummary, aiThresholds);
+    const safety = repSafetyStatus(frames, {
+      boundaryInsideRatio,
+      visibleJointRatio,
+      minBoundaryInsideRatio: motionThresholds.boundaryInsideRatio,
+      minVisibleJointRatio: motionThresholds.visibleJointRatio,
+    });
+    const scorePolicy = scoreByAiPrimaryPolicy(ruleOverallScore, safety.ok ? aiSummary : null, aiThresholds, safety);
+    const overallScore = scorePolicy.finalScore;
     const reasons = [];
     const useAiPrimaryReasons = source === 'ai_primary' && aiSummary.scoreable;
+    if (!safety.ok) reasons.push(safety.reason);
     if (!useAiPrimaryReasons && targetReachScore < motionThresholds.targetPct) reasons.push('incomplete_target');
     if (!useAiPrimaryReasons && pathScore < motionThresholds.validScore) reasons.push('wrong_path');
-    if (overallScore < motionThresholds.validScore) reasons.push(useAiPrimaryReasons ? 'low_ai_score' : 'low_pose_score');
+    if (Number.isFinite(overallScore) && overallScore < motionThresholds.validScore) {
+      reasons.push(useAiPrimaryReasons ? 'low_ai_score' : 'low_pose_score');
+    }
     if (boundaryInsideRatio < motionThresholds.boundaryInsideRatio) reasons.push('out_of_frame');
     if (visibleJointRatio < motionThresholds.visibleJointRatio) reasons.push('low_visibility');
     if (durationMs < motionThresholds.minRepMs) reasons.push('too_fast');
     if (durationMs > motionThresholds.maxRepMs) reasons.push('too_slow');
-    if (aiSummary.reason) reasons.push(aiSummary.reason);
-    const valid = !reasons.length;
+    if (safety.ok && aiSummary.reason) reasons.push(aiSummary.reason);
+    const uniqueReasons = [...new Set(reasons.filter(Boolean))];
+    const valid = !uniqueReasons.length;
     return {
       index,
       valid,
-      reasons,
+      reasons: uniqueReasons,
+      scoreable: scorePolicy.scoreable,
+      finalReason: scorePolicy.finalReason,
+      scoringPolicySource: scorePolicy.scoreSource,
       repSource: source,
       aiPhaseRep,
       overallScore,
@@ -545,9 +656,9 @@ export function createMotionQualityEngine({
       boundaryScore,
       visibilityScore,
       tempoScore,
-      aiQualityScore: aiSummary.avgAiQualityScore,
-      aiSignalCounts: aiSummary.counts,
-      aiReasonRatio: aiSummary.reasonRatio,
+      aiQualityScore: safety.ok ? aiSummary.avgAiQualityScore : null,
+      aiSignalCounts: safety.ok ? aiSummary.counts : {},
+      aiReasonRatio: safety.ok && aiSummary.avgAiQualityScore != null ? aiSummary.reasonRatio : null,
       durationMs,
       side,
       boundaryInsideRatio: Math.round(boundaryInsideRatio * 1000) / 1000,
@@ -567,7 +678,7 @@ export function createMotionQualityEngine({
   }
 
   function commitAiCompletedRep(completedRep) {
-    if (aiThresholds.repCounting !== 'primary' || !completedRep) return null;
+    if (aiThresholds.repCounting !== 'primary' || !completedRep || aiThresholds.modelApproved !== true) return null;
     const startedAt = Number(completedRep.startedAt);
     const endedAt = Number(completedRep.endedAt ?? lastFrameAt ?? Date.now());
     const repFrames = aiRepFrames.filter((frame) => (
@@ -575,6 +686,7 @@ export function createMotionQualityEngine({
       && (!Number.isFinite(endedAt) || frame.timestamp <= endedAt)
     ));
     const frames = repFrames.length ? repFrames : aiRepFrames.slice();
+    if (!frames.length) return null;
     const durationMs = Math.max(1, Number.isFinite(startedAt) && Number.isFinite(endedAt)
       ? endedAt - startedAt
       : (frames.at(-1)?.timestamp ?? 1) - (frames[0]?.timestamp ?? 0));
@@ -599,11 +711,20 @@ export function createMotionQualityEngine({
     ])];
     const durationMs = (first.durationMs || 0) + (second.durationMs || 0);
     const avg = (key) => scoreClamp(mean([first[key], second[key]]) ?? 0);
-    const overallScore = avg('overallScore');
+    const avgNullable = (key) => {
+      const value = mean([first[key], second[key]]);
+      return value == null ? null : scoreClamp(value);
+    };
+    const aiReasonRatio = mean([first.aiReasonRatio, second.aiReasonRatio]);
+    const scoreable = first.scoreable !== false && second.scoreable !== false;
+    const overallScore = scoreable ? avg('overallScore') : null;
     return {
       index: repSummaries.length + 1,
       valid: sideChanged && first.valid && second.valid && !reasons.length,
       reasons,
+      scoreable,
+      finalReason: scoreable ? null : first.finalReason || second.finalReason || 'data_quality_not_scoreable',
+      scoringPolicySource: scoreable ? first.scoringPolicySource || second.scoringPolicySource || null : 'safety',
       overallScore,
       ruleOverallScore: avg('ruleOverallScore'),
       poseScore: avg('poseScore'),
@@ -612,9 +733,9 @@ export function createMotionQualityEngine({
       boundaryScore: avg('boundaryScore'),
       visibilityScore: avg('visibilityScore'),
       tempoScore: avg('tempoScore'),
-      aiQualityScore: avg('aiQualityScore'),
-      aiSignalCounts: mergeCounts(first.aiSignalCounts, second.aiSignalCounts),
-      aiReasonRatio: Math.round(mean([first.aiReasonRatio, second.aiReasonRatio]) * 1000) / 1000,
+      aiQualityScore: scoreable ? avgNullable('aiQualityScore') : null,
+      aiSignalCounts: scoreable ? mergeCounts(first.aiSignalCounts, second.aiSignalCounts) : {},
+      aiReasonRatio: scoreable && Number.isFinite(aiReasonRatio) ? Math.round(aiReasonRatio * 1000) / 1000 : null,
       durationMs,
       sides: [first.side, second.side].filter(Boolean),
       sideSummaries: [first, second],
@@ -667,6 +788,12 @@ export function createMotionQualityEngine({
     const visibleJointRatio = visibleRatioFromAngleMeta(angleMeta, scoringJoints, poseScored.visibleRatio);
     const visibilityScore = scoreClamp(visibleJointRatio * 100);
     const boundaryInside = isInside(input?.boundary);
+    const frameSafety = frameSafetyStatus({
+      hasPose,
+      boundary: input?.boundary,
+      visibleJointRatio,
+      minVisibleRatio: motionThresholds.visibleJointRatio,
+    });
     const frameScore = {
       timestamp,
       progressPct,
@@ -675,6 +802,8 @@ export function createMotionQualityEngine({
       boundaryInside,
       visibleJointRatio,
       visibilityScore,
+      scoreable: frameSafety.ok,
+      safetyReason: frameSafety.reason,
       aiSignal,
       aiAssessment,
     };
@@ -737,15 +866,17 @@ export function createMotionQualityEngine({
       (boundaryInside ? 100 : 0) * motionThresholds.weights.boundary +
       100 * motionThresholds.weights.tempo,
     );
-    const currentScore = fuseAiPrimaryScore(
+    const currentPolicy = scoreByAiPrimaryPolicy(
       ruleCurrentScore,
-      aiAssessment ? {
+      frameSafety.ok && aiAssessment ? {
         scoreable: true,
         reason: aiAssessment.reason,
         avgAiQualityScore: aiAssessment.qualityScore,
       } : null,
       aiThresholds,
+      frameSafety,
     );
+    const currentScore = currentPolicy.finalScore;
     const snapshot = {
       kind,
       phase,
@@ -764,6 +895,9 @@ export function createMotionQualityEngine({
       boundaryScore: boundaryInside ? 100 : 0,
       tempoScore: 100,
       overallScore: currentScore,
+      scoreable: currentPolicy.scoreable,
+      finalReason: currentPolicy.finalReason,
+      scoringPolicySource: currentPolicy.scoreSource,
       activeSide,
       strongestSide: strongest?.side || null,
       sideProgresses: sideRows.map((row) => ({ side: row.side, progressPct: row.progressPct })),
@@ -797,6 +931,12 @@ export function createMotionQualityEngine({
     const boundaryInside = isInside(input?.boundary);
     const visibleJointRatio = visibleRatioFromAngleMeta(angleMeta, joints, scored.visibleRatio);
     const visibilityScore = scoreClamp(visibleJointRatio * 100);
+    const frameSafety = frameSafetyStatus({
+      hasPose,
+      boundary: input?.boundary,
+      visibleJointRatio,
+      minVisibleRatio: holdThresholds.visibleJointRatio,
+    });
     holdFrames.push({
       timestamp,
       poseScore: scored.score,
@@ -804,6 +944,8 @@ export function createMotionQualityEngine({
       visibleJointRatio,
       visibilityScore,
       jointAngles,
+      scoreable: frameSafety.ok,
+      safetyReason: frameSafety.reason,
       aiSignal,
       aiAssessment,
     });
@@ -826,10 +968,12 @@ export function createMotionQualityEngine({
       visibilityScore: summary.avgVisibilityScore,
       durationScore: summary.durationScore,
       overallScore: summary.overallScore,
+      scoreable: summary.scoreable,
+      finalReason: summary.finalReason,
       currentScore: summary.overallScore,
       jointDeltas: scored.rows,
       worstJoint: scored.worst,
-      cue: summary.overallScore >= holdThresholds.validScore
+      cue: summary.scoreable && summary.overallScore >= holdThresholds.validScore
         ? { id: 'hold_good', tone: 'good', text: lang === 'th' ? 'ค้างได้ดี' : 'Good hold' }
         : { id: 'hold_adjust', tone: 'warn', text: lang === 'th' ? 'ค้างให้นิ่งและอยู่ในกรอบ' : 'Hold steady inside the frame' },
     };
@@ -861,15 +1005,24 @@ export function createMotionQualityEngine({
       avgBoundaryScore * holdThresholds.weights.boundary +
       durationScore * holdThresholds.weights.duration,
     );
-    const overallScore = fuseAiPrimaryScore(ruleOverallScore, aiSummary, aiThresholds);
+    const safety = repSafetyStatus(frames, {
+      boundaryInsideRatio,
+      visibleJointRatio,
+      minBoundaryInsideRatio: holdThresholds.boundaryInsideRatio,
+      minVisibleJointRatio: holdThresholds.visibleJointRatio,
+    });
+    const scorePolicy = scoreByAiPrimaryPolicy(ruleOverallScore, safety.ok ? aiSummary : null, aiThresholds, safety);
+    const overallScore = scorePolicy.finalScore;
     const reasons = [];
-    if (overallScore < holdThresholds.validScore) reasons.push('low_pose_score');
+    if (!safety.ok) reasons.push(safety.reason);
+    if (Number.isFinite(overallScore) && overallScore < holdThresholds.validScore) reasons.push('low_pose_score');
     if (avgStabilityScore < holdThresholds.validScore) reasons.push('unstable_hold');
     if (boundaryInsideRatio < holdThresholds.boundaryInsideRatio) reasons.push('out_of_frame');
     if (visibleJointRatio < holdThresholds.visibleJointRatio) reasons.push('low_visibility');
     if (durationScore < holdThresholds.minHoldCompletionRatio * 100) reasons.push('incomplete_hold_duration');
-    if (aiSummary.reason) reasons.push(aiSummary.reason);
-    const valid = !reasons.length;
+    if (safety.ok && aiSummary.reason) reasons.push(aiSummary.reason);
+    const uniqueReasons = [...new Set(reasons.filter(Boolean))];
+    const valid = !uniqueReasons.length;
     return {
       type: 'hold',
       reps: durationMs > 0 ? 1 : 0,
@@ -879,31 +1032,38 @@ export function createMotionQualityEngine({
       holdSecActual: Math.round(durationMs / 1000),
       overallScore,
       avgScore: overallScore,
+      scoreable: scorePolicy.scoreable,
+      finalReason: scorePolicy.finalReason,
+      scoringPolicySource: scorePolicy.scoreSource,
+      scoreSource: 'rule',
       ruleOverallScore,
       avgPoseScore,
       avgStabilityScore,
       avgBoundaryScore,
       avgVisibilityScore,
-      avgAiQualityScore: aiSummary.avgAiQualityScore,
-      aiSignalCounts: aiSummary.counts,
-      aiReasonRatio: aiSummary.reasonRatio,
+      avgAiQualityScore: safety.ok ? aiSummary.avgAiQualityScore : null,
+      aiSignalCounts: safety.ok ? aiSummary.counts : {},
+      aiReasonRatio: safety.ok && aiSummary.avgAiQualityScore != null ? aiSummary.reasonRatio : null,
       durationScore,
       boundaryInsideRatio: Math.round(boundaryInsideRatio * 1000) / 1000,
       visibleJointRatio: Math.round(visibleJointRatio * 1000) / 1000,
-      invalidReasons: reasons.reduce((acc, reason) => ({ ...acc, [reason]: (acc[reason] || 0) + 1 }), {}),
+      invalidReasons: uniqueReasons.reduce((acc, reason) => ({ ...acc, [reason]: (acc[reason] || 0) + 1 }), {}),
       repSummaries: [{
         index: 1,
         valid,
-        reasons,
+        reasons: uniqueReasons,
+        scoreable: scorePolicy.scoreable,
+        finalReason: scorePolicy.finalReason,
+        scoringPolicySource: scorePolicy.scoreSource,
         overallScore,
         ruleOverallScore,
         poseScore: avgPoseScore,
         stabilityScore: avgStabilityScore,
         boundaryScore: avgBoundaryScore,
         visibilityScore: avgVisibilityScore,
-        aiQualityScore: aiSummary.avgAiQualityScore,
-        aiSignalCounts: aiSummary.counts,
-        aiReasonRatio: aiSummary.reasonRatio,
+        aiQualityScore: safety.ok ? aiSummary.avgAiQualityScore : null,
+        aiSignalCounts: safety.ok ? aiSummary.counts : {},
+        aiReasonRatio: safety.ok && aiSummary.avgAiQualityScore != null ? aiSummary.reasonRatio : null,
         durationScore,
         durationMs,
       }],

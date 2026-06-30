@@ -18,6 +18,14 @@ function elbowExercise() {
   };
 }
 
+function aiReadyExercise(exercise) {
+  return {
+    ...exercise,
+    activeModelId: 'motion-tcn',
+    modelStatus: 'deployed',
+  };
+}
+
 function elbowReference() {
   return {
     kind: REFERENCE_KINDS.MOTION_CYCLE,
@@ -130,7 +138,7 @@ test('motion frame sequence through shared processor counts a rep', () => {
 });
 
 test('async practice frame processor can feed classifier signal into motion scoring', async () => {
-  const exercise = elbowExercise();
+  const exercise = aiReadyExercise(elbowExercise());
   const reference = elbowReference();
   const engine = createMotionQualityEngine({
     exercise,
@@ -177,7 +185,7 @@ test('async practice frame processor can feed classifier signal into motion scor
 });
 
 test('async practice frame processor exposes AI phase rep counter snapshots', async () => {
-  const exercise = elbowExercise();
+  const exercise = aiReadyExercise(elbowExercise());
   const reference = elbowReference();
   const engine = createMotionQualityEngine({
     exercise,
@@ -220,7 +228,7 @@ test('async practice frame processor exposes AI phase rep counter snapshots', as
 });
 
 test('AI phase rep becomes the primary session summary when rule progress never completes', async () => {
-  const exercise = elbowExercise();
+  const exercise = aiReadyExercise(elbowExercise());
   const reference = elbowReference();
   const engine = createMotionQualityEngine({
     exercise,
@@ -261,6 +269,48 @@ test('AI phase rep becomes the primary session summary when rule progress never 
   assert.equal(summary.validReps, 1);
   assert.equal(summary.ruleSummary.reps, 0);
   assert.equal(summary.repSummaries[0].repSource, 'ai_primary');
+});
+
+test('AI phase rep cannot become primary without approved model metadata', async () => {
+  const exercise = elbowExercise();
+  const reference = elbowReference();
+  const engine = createMotionQualityEngine({
+    exercise,
+    reference,
+    dose: { reps: 1, sets: 1 },
+    thresholds: { holdTargetMs: 40, holdRestMs: 40, minRepMs: 200 },
+  });
+  const processor = createPracticeFrameProcessor({
+    exercise,
+    reference,
+    motionEngine: engine,
+  });
+  const sequence = [
+    [0, 'rest'],
+    [120, 'rest'],
+    [240, 'moving_to_target'],
+    [360, 'target'],
+    [480, 'target'],
+    [600, 'target'],
+    [720, 'returning'],
+    [840, 'rest'],
+    [960, 'rest'],
+    [1080, 'rest'],
+  ];
+  for (const [timestamp, phase] of sequence) {
+    await processor.processPracticeFrameWithAi({
+      landmarks: makeElbowPose(30),
+      liveAngles: { left_elbow: 30 },
+      boundary: inside,
+      timestamp,
+      aiSignal: { phase, quality: 'good', confidence: 0.94 },
+    });
+  }
+
+  const summary = engine.finishSummary();
+  assert.equal(summary.scoreSource, 'rule');
+  assert.equal(summary.reps, 0);
+  assert.equal(summary.scoreable, true);
 });
 
 test('hold reference produces hold snapshot through shared processor', () => {

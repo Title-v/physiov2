@@ -9,6 +9,14 @@ import {
 const inside = { status: 'inside' };
 const outside = { status: 'outside' };
 
+function aiReadyExercise(exercise) {
+  return {
+    ...exercise,
+    activeModelId: 'motion-tcn',
+    modelStatus: 'deployed',
+  };
+}
+
 function motionReference() {
   return {
     kind: REFERENCE_KINDS.MOTION_CYCLE,
@@ -222,32 +230,37 @@ test('AI signal is exposed in snapshots without changing rule-based rep state', 
 });
 
 test('high-confidence AI quality can invalidate an otherwise valid rep as an assistive signal', () => {
-  const exercise = { id: 'shoulder', type: 'rep', primaryJoint: 'right_shoulder', reps: 1, sets: 1 };
+  const exercise = aiReadyExercise({ id: 'shoulder', type: 'rep', primaryJoint: 'right_shoulder', reps: 1, sets: 1 });
   const engine = createMotionQualityEngine({ exercise, reference: motionReference(), dose: { reps: 1, sets: 1 } });
   pushShoulder(engine, [20, 20, 60, 95, 120, 120, 80, 45, 20, 20], {
     aiSignal: { phase: 'moving_to_target', quality: 'wrong_path', confidence: 0.91 },
   });
   const summary = engine.finishSummary();
+  const rep = summary.repSummaries[0];
 
   assert.equal(summary.reps, 1);
   assert.equal(summary.validReps, 0);
   assert.equal(summary.invalidReasons.ai_wrong_path, 1);
   assert.equal(summary.aiSignalCounts.wrong_path > 0, true);
-  assert.equal(summary.repSummaries[0].ruleOverallScore >= summary.repSummaries[0].overallScore, true);
+  assert.equal(rep.overallScore, Math.round(40 * 0.85 + rep.ruleOverallScore * 0.15));
+  assert.equal(rep.ruleOverallScore >= rep.overallScore, true);
 });
 
 test('low-confidence AI quality is ignored so deterministic scoring remains authoritative', () => {
-  const exercise = { id: 'shoulder', type: 'rep', primaryJoint: 'right_shoulder', reps: 1, sets: 1 };
+  const exercise = aiReadyExercise({ id: 'shoulder', type: 'rep', primaryJoint: 'right_shoulder', reps: 1, sets: 1 });
   const engine = createMotionQualityEngine({ exercise, reference: motionReference(), dose: { reps: 1, sets: 1 } });
   pushShoulder(engine, [20, 20, 60, 95, 120, 120, 80, 45, 20, 20], {
     aiSignal: { phase: 'moving_to_target', quality: 'wrong_path', confidence: 0.4 },
   });
   const summary = engine.finishSummary();
+  const rep = summary.repSummaries[0];
 
   assert.equal(summary.reps, 1);
   assert.equal(summary.validReps, 1);
   assert.equal(summary.invalidReasons.ai_wrong_path, undefined);
   assert.deepEqual(summary.aiSignalCounts, {});
+  assert.equal(rep.overallScore, rep.ruleOverallScore);
+  assert.equal(rep.finalReason, 'ai_low_confidence_or_missing_model');
 });
 
 test('unknown AI quality is ignored instead of becoming good', () => {
@@ -272,6 +285,12 @@ test('completed out-of-frame rep is counted but invalid', () => {
   assert.equal(summary.reps, 1);
   assert.equal(summary.invalidRepCount, 1);
   assert.equal(summary.invalidReasons.out_of_frame, 1);
+  assert.equal(summary.scoreable, false);
+  assert.equal(summary.overallScore, null);
+  assert.equal(summary.avgRepQualityScore, null);
+  assert.equal(summary.repSummaries[0].scoreable, false);
+  assert.equal(summary.repSummaries[0].overallScore, null);
+  assert.equal(summary.repSummaries[0].finalReason, 'out_of_frame');
 });
 
 test('low-visibility metadata invalidates an otherwise completed rep', () => {
@@ -385,7 +404,7 @@ test('hold pose produces scored summary', () => {
 });
 
 test('hold pose summary includes high-confidence AI unstable quality as an assistive invalid reason', () => {
-  const exercise = { id: 'balance', type: 'hold', primaryJoint: 'right_knee', holdSec: 1 };
+  const exercise = aiReadyExercise({ id: 'balance', type: 'hold', primaryJoint: 'right_knee', holdSec: 1 });
   const reference = {
     kind: REFERENCE_KINDS.HOLD_POSE,
     scoringJoints: ['right_knee'],
