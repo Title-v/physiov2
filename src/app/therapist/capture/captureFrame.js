@@ -7,6 +7,36 @@ function defaultNow() {
   return globalThis.performance?.now ? globalThis.performance.now() : Date.now();
 }
 
+function validationFrameArgs({
+  timestamp,
+  live,
+  previousBoundaryFrame,
+  liveAngles,
+  angleMeta,
+  boundary,
+}) {
+  return {
+    timestamp,
+    landmarks: live,
+    previousBoundaryFrame,
+    liveAngles,
+    angleMeta,
+    boundary,
+  };
+}
+
+function withValidationFrame(base, validationFrame) {
+  const snapshot = validationFrame?.snapshot || null;
+  return {
+    ...base,
+    validationFrame,
+    snapshot,
+    ghostLandmarks: validationFrame?.ghostLandmarks || null,
+    colors: snapshot ? validationScoreColors(snapshot.overallScore) : base.colors,
+    validationUnavailable: false,
+  };
+}
+
 export function prepareLiveCaptureFrame({
   rawLandmarks = null,
   landmarkFilter = null,
@@ -80,4 +110,34 @@ export function prepareLiveCaptureFrame({
     colors,
     validationUnavailable,
   };
+}
+
+export async function prepareLiveCaptureFrameWithAi(options = {}) {
+  const base = prepareLiveCaptureFrame({
+    ...options,
+    mode: 'setup',
+    reference: null,
+  });
+  if (!base.hasPose) return base;
+  if (!options.reference || options.mode !== 'validate') return base;
+
+  const validationProcessor = options.validationProcessorFor?.(options.exercise || {}, options.reference);
+  if (!validationProcessor) {
+    return {
+      ...base,
+      validationUnavailable: true,
+    };
+  }
+  const args = validationFrameArgs({
+    timestamp: (options.now || defaultNow)(),
+    live: base.live,
+    previousBoundaryFrame: options.previousBoundaryFrame,
+    liveAngles: base.liveAngles,
+    angleMeta: base.angleMeta,
+    boundary: base.boundary,
+  });
+  const validationFrame = typeof validationProcessor.processPracticeFrameWithAi === 'function'
+    ? await validationProcessor.processPracticeFrameWithAi(args)
+    : validationProcessor.processPracticeFrame(args);
+  return withValidationFrame(base, validationFrame);
 }

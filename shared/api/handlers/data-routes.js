@@ -1,5 +1,7 @@
 import {
   cleanPlan,
+  aiModelFromRow,
+  datasetFromRow,
   isoFromEpochMs,
   normalizeAuthError,
   planFromRow,
@@ -12,6 +14,8 @@ import { createPatientAccess } from './patient-access.js';
 import {
   validateCreatePatientPayload,
   validateDeleteReferencePayload,
+  validateAiModelPayload,
+  validateDatasetPayload,
   validatePatientLookupPayload,
   validatePlanPayload,
   validateReferencePayload,
@@ -338,15 +342,135 @@ export function createDataHandlers({
     return jsonResult(sessionFromRow(data), 201);
   }
 
+  async function getDatasets(req) {
+    const notReady = requireSupabaseResult();
+    if (notReady) return notReady;
+    const notTherapist = requireTherapist(req);
+    if (notTherapist) return notTherapist;
+    const patientId = req.query?.patientId || null;
+    if (patientId) {
+      try {
+        if (!(await canAccessPatient(req, patientId))) return errorResult(403, 'forbidden');
+      } catch (error) {
+        return errorResult(500, 'supabase_error', error.message);
+      }
+    }
+    let query = req.auth.db
+      .from(TABLES.datasets)
+      .select('*')
+      .eq('therapist_id', req.auth.user.id);
+    if (patientId) query = query.eq('patient_id', patientId);
+    if (req.query?.exerciseId) query = query.eq('exercise_id', req.query.exerciseId);
+    if (req.query?.landmarkSchemaId) query = query.eq('landmark_schema_id', req.query.landmarkSchemaId);
+    const { data, error } = await query.order('created_at', { ascending: false });
+    if (error) return errorResult(500, 'supabase_error', error.message);
+    return jsonResult((data || []).map(datasetFromRow));
+  }
+
+  async function postDataset(req) {
+    const notReady = requireSupabaseResult();
+    if (notReady) return notReady;
+    const notTherapist = requireTherapist(req);
+    if (notTherapist) return notTherapist;
+    const validation = validateDatasetPayload(req.body);
+    if (!validation.ok) return validationErrorResult(validation);
+    const row = validation.value;
+    const patientId = req.query?.patientId || row.patientId || null;
+    if (patientId) {
+      try {
+        if (!(await canAccessPatient(req, patientId))) return errorResult(403, 'forbidden');
+      } catch (error) {
+        return errorResult(500, 'supabase_error', error.message);
+      }
+    }
+    const id = row.id || `ds_${req.auth.user.id}_${row.exerciseId}_${Date.now()}`;
+    const dataPayload = {
+      ...row,
+      id,
+      patientId,
+      therapistId: req.auth.user.id,
+      storedAt: Date.now(),
+    };
+    const { data, error } = await req.auth.db
+      .from(TABLES.datasets)
+      .insert({
+        id,
+        therapist_id: req.auth.user.id,
+        patient_id: patientId,
+        exercise_id: row.exerciseId,
+        landmark_schema_id: row.landmarkSchemaId,
+        label_status: row.labelStatus,
+        data_quality: row.dataQuality,
+        trainable: row.trainable === true,
+        data: dataPayload,
+      })
+      .select()
+      .single();
+    if (error) return errorResult(500, 'supabase_error', error.message);
+    return jsonResult(datasetFromRow(data), 201);
+  }
+
+  async function getAiModels(req) {
+    const notReady = requireSupabaseResult();
+    if (notReady) return notReady;
+    const notTherapist = requireTherapist(req);
+    if (notTherapist) return notTherapist;
+    let query = req.auth.db
+      .from(TABLES.aiModels)
+      .select('*')
+      .eq('therapist_id', req.auth.user.id);
+    if (req.query?.exerciseId) query = query.eq('exercise_id', req.query.exerciseId);
+    if (req.query?.landmarkSchemaId) query = query.eq('landmark_schema_id', req.query.landmarkSchemaId);
+    const { data, error } = await query.order('updated_at', { ascending: false });
+    if (error) return errorResult(500, 'supabase_error', error.message);
+    return jsonResult((data || []).map(aiModelFromRow));
+  }
+
+  async function postAiModel(req) {
+    const notReady = requireSupabaseResult();
+    if (notReady) return notReady;
+    const notTherapist = requireTherapist(req);
+    if (notTherapist) return notTherapist;
+    const validation = validateAiModelPayload(req.body);
+    if (!validation.ok) return validationErrorResult(validation);
+    const model = validation.value;
+    const now = new Date().toISOString();
+    const dataPayload = {
+      ...model,
+      therapistId: req.auth.user.id,
+      updatedAt: Date.now(),
+    };
+    const { data, error } = await req.auth.db
+      .from(TABLES.aiModels)
+      .upsert({
+        id: model.id,
+        therapist_id: req.auth.user.id,
+        exercise_id: model.exerciseId,
+        landmark_schema_id: model.landmarkSchemaId,
+        version: model.version,
+        approved: model.approved === true,
+        data: dataPayload,
+        updated_at: now,
+      }, { onConflict: 'id' })
+      .select()
+      .single();
+    if (error) return errorResult(500, 'supabase_error', error.message);
+    return jsonResult(aiModelFromRow(data), 201);
+  }
+
   return {
     createPatient,
     deleteReference,
+    getAiModels,
+    getDatasets,
     getPlan,
     getReferences,
     getSessions,
     linkPatient,
     listPatients,
     postReference,
+    postAiModel,
+    postDataset,
     postSession,
     putPlan,
   };

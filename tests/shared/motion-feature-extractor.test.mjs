@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   DEFAULT_LANDMARK_COUNT,
+  expectedMotionFeatureSizeForSchema,
   extractMotionFeatures,
   extractMotionFeatureWindow,
   featureVectorsFromWindow,
@@ -22,7 +23,7 @@ test('extractMotionFeatures builds a stable vector from landmarks angles and fla
   });
 
   assert.equal(features.landmarks.length, DEFAULT_LANDMARK_COUNT);
-  assert.deepEqual(features.joints, ['left_shoulder', 'right_shoulder']);
+  assert.deepEqual(features.joints, ['right_shoulder', 'left_shoulder']);
   assert.equal(features.angles.right_shoulder, 45);
   assert.equal(features.insideFrame, true);
   assert.equal(features.progress, 55);
@@ -43,6 +44,54 @@ test('extractMotionFeatureWindow computes angle velocity from previous frame tim
 
   assert.equal(window[0].angleVelocity.right_knee, 0);
   assert.equal(window[1].angleVelocity.right_knee, 150);
+});
+
+test('extractMotionFeatures uses body-region schema landmarks when schema id is provided', () => {
+  const landmarks = Array.from({ length: DEFAULT_LANDMARK_COUNT }, (_, index) => ({
+    x: index / 100,
+    y: index / 200,
+    z: 0,
+    visibility: 0.9,
+  }));
+  const features = extractMotionFeatures({
+    t: 0,
+    landmarks,
+    jointAngles: { right_shoulder: 70, right_elbow: 120, left_knee: 30 },
+    boundaryStatus: 'inside',
+  }, {
+    landmarkSchemaId: 'right_arm.v1',
+  });
+
+  assert.equal(features.landmarks.length, 5);
+  assert.deepEqual(features.modelInputLandmarks, ['right_shoulder', 'right_elbow', 'right_wrist', 'left_shoulder', 'right_hip']);
+  assert.deepEqual(features.joints, ['right_shoulder', 'right_elbow']);
+  assert.equal(features.featureVector.length, 5 * 4 + 2 + 2 + 3);
+  assert.equal(features.landmarkSchemaId, 'right_arm.v1');
+  assert.equal(expectedMotionFeatureSizeForSchema({ landmarkSchemaId: 'right_arm.v1' }), features.featureVector.length);
+});
+
+test('extractMotionFeatures does not fall back to full landmarks for unknown schema id', () => {
+  const landmarks = Array.from({ length: DEFAULT_LANDMARK_COUNT }, (_, index) => ({
+    x: index / 100,
+    y: index / 200,
+    z: 0,
+    visibility: 0.9,
+  }));
+  const features = extractMotionFeatures({
+    t: 0,
+    landmarks,
+    jointAngles: { right_shoulder: 70 },
+    boundaryStatus: 'inside',
+  }, {
+    landmarkSchemaId: 'made_up.v1',
+  });
+
+  assert.equal(features.schemaMissing, true);
+  assert.equal(features.landmarkSchemaId, 'made_up.v1');
+  assert.deepEqual(features.landmarks, []);
+  assert.deepEqual(features.joints, []);
+  assert.deepEqual(features.featureVector, []);
+  assert.equal(features.featureSize, 0);
 });
 
 test('featureVectorsFromWindow returns vectors only for classifier input', () => {

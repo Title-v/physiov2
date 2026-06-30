@@ -5,6 +5,7 @@ import { ensureTherapist, getTherapist, logout, isGuest } from '../../../../shar
 import { COUNT_MODES, getExercises, getExercise, exLabel, exerciseSnapshot } from '../../../../shared/core/exercises.js';
 import { getPlanFull, savePlanFull, getAllReferences, syncPatientCloudData } from '../../../../shared/core/store.js';
 import { fetchPatients, linkPatient, createPatient } from '../../../../shared/core/patients.js';
+import { exerciseWithModelManifest, fetchAiModels, selectModelManifestForExercise } from '../../../../shared/core/ai-models.js';
 import { getLang, icon, mountNav, onLangChange, t, toast } from '../../../../shared/core/ui.js';
 
 const PLAN_CSS = `
@@ -84,13 +85,31 @@ function ensureStartDate(plan) {
   return plan?.startDate ? plan : { ...plan, startDate: todayStr() };
 }
 
-function planItemDefault(id) {
-  const ex = getExercise(id);
+function exerciseWithPlanModel(idOrExercise, aiModels = []) {
+  const ex = typeof idOrExercise === 'string' ? getExercise(idOrExercise) : idOrExercise;
+  return exerciseWithModelManifest(ex, selectModelManifestForExercise(ex, aiModels));
+}
+
+function planItemDefault(id, aiModels = []) {
+  const ex = exerciseWithPlanModel(id, aiModels);
   const item = { exerciseId: id, reps: ex.reps, sets: ex.sets, holdSec: ex.holdSec, tol: ex.tol };
   if (ex.movementPattern === 'alternating') item.countMode = ex.countMode || 'per_side';
   const snap = exerciseSnapshot(ex);
   if (snap) item.exercise = snap;
   return item;
+}
+
+function planWithModelSnapshots(plan, aiModels = []) {
+  if (!plan?.items?.length) return plan;
+  return {
+    ...plan,
+    items: plan.items.map((item) => {
+      const base = item.exercise || getExercise(item.exerciseId);
+      const ex = exerciseWithPlanModel(base, aiModels);
+      const snap = exerciseSnapshot(ex) || item.exercise || null;
+      return snap ? { ...item, exercise: snap } : item;
+    }),
+  };
 }
 
 function daysWord(days, lang) {
@@ -436,6 +455,7 @@ export default function TherapistPlanClient() {
   const [patients, setPatients] = useState([]);
   const [patientId, setPatientId] = useState(null);
   const [plan, setPlan] = useState(null);
+  const [aiModels, setAiModels] = useState([]);
   const patientIdRef = useRef(null);
 
   const loadPatientData = useCallback(async (nextPatientId) => {
@@ -465,7 +485,11 @@ export default function TherapistPlanClient() {
     ensureTherapist().then(async () => {
       if (!mounted) return;
       try {
-        await refreshPatients();
+        const [models] = await Promise.all([
+          fetchAiModels().catch(() => []),
+          refreshPatients(),
+        ]);
+        setAiModels(Array.isArray(models) ? models : []);
       } catch {
         toast(getLang() === 'th' ? 'โหลดรายชื่อผู้ป่วยไม่สำเร็จ' : 'Could not load patients');
         setPatients([]);
@@ -538,7 +562,7 @@ export default function TherapistPlanClient() {
       const exists = inPlan(current, id);
       const items = exists
         ? current.items.filter((item) => item.exerciseId !== id)
-        : [...current.items, planItemDefault(id)];
+        : [...current.items, planItemDefault(id, aiModels)];
       return { ...current, items };
     });
   };
@@ -569,7 +593,9 @@ export default function TherapistPlanClient() {
       return;
     }
     try {
-      await savePlanFull(patientId, plan);
+      const planToSave = planWithModelSnapshots(plan, aiModels);
+      await savePlanFull(patientId, planToSave);
+      setPlan(planToSave);
       const name = patients.find((patient) => patient.id === patientId)?.name || '';
       toast(t('planSaved', { name }));
     } catch {

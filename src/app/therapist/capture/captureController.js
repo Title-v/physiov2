@@ -2,6 +2,8 @@ import { h, clear, mountNav, onLangChange, getLang, t, icon, ringSVG, toast } fr
 import { BODY_REGIONS, COUNT_MODES, EXERCISES, MOVEMENT_PATTERNS, getExercises, getExercise, exLabel, saveCustomExercise, updateCustomExercise, deleteCustomExercise } from '../../../../shared/core/exercises.js';
 import { getReference, getAllReferences, saveReference, clearReference, getPlan, savePlan, syncPatientCloudData } from '../../../../shared/core/store.js';
 import { getSettings, saveSettings } from '../../../../shared/core/store.js';
+import { apiPost } from '../../../../shared/core/api.js';
+import { exerciseWithModelManifest, fetchAiModels, selectModelManifestForExercise } from '../../../../shared/core/ai-models.js';
 import { ensureTherapist, getTherapist, logout, isGuest } from '../../../../shared/core/auth-ui.js';
 import { fetchPatients, linkPatient, createPatient } from '../../../../shared/core/patients.js';
 import { LANDMARK_NAMES, PoseLandmarker, createPoseEngine, makeDrawer, startCamera, stopCamera } from '../../../../shared/ai/PoseDetection.js';
@@ -9,7 +11,11 @@ import { jointAngleCalculator, JOINT_SPECS } from '../../../../shared/ai/JointAn
 import { ANGLE_OVERLAY_COLORS, drawAngleOverlayForJoints } from '../../../../shared/ai/AngleOverlay.js';
 import { BOUNDARY_BOX_RATIO, drawBoundaryBox, evaluateBoundaryBox } from '../../../../shared/ai/BoundaryBoxGate.js';
 import { createEmaLandmarkFilter } from '../../../../shared/ai/LandmarkFilters.js';
+import { createMotionDatasetRecorder } from '../../../../shared/ai/MotionDatasetRecorder.js';
+import { isReviewedTrainableRow, reviewDatasetRow } from '../../../../shared/ai/DatasetLabeler.js';
+import { motionDatasetRowsToJsonl } from '../../../../shared/ai/MotionDataset.js';
 import { createTherapistCaptureState, resetValidationState } from './captureState.js';
+import { completedDatasetRepFromSnapshot, datasetPhaseFromSnapshot } from './datasetCapture.js';
 import {
   persistReferenceForCapture,
   saveHoldReferenceForCapture,
@@ -47,16 +53,21 @@ import {
 } from './sequenceRecorder.js';
 import {
   buildDatasetJsonlExportForCapture,
+  buildDatasetPreviewSequence,
   buildSkeletonExportPayloadForCapture,
   createClipPreviewRuntime,
   downloadJsonFile,
   downloadTextFile,
   exportTimestamp,
   safeExportId,
+  startClipPlaybackState,
+  stepClipPlaybackState,
+  stopClipPlaybackState,
   setSequenceMarkerFromPreviewIndex,
 } from './previewController.js';
-import { getValidationFrameProcessor } from './validationController.js';
-import { prepareLiveCaptureFrame } from './captureFrame.js';
+import { getValidationFrameProcessor, validationFeedbackText } from './validationController.js';
+import { prepareLiveCaptureFrameWithAi } from './captureFrame.js';
+import { saveReviewedDatasetRows } from './datasetStorage.js';
 import { renderCapturePanel } from './capturePanel.js';
 import { renderCaptureShell, renderCaptureTopbar } from './captureShell.js';
 
@@ -69,6 +80,7 @@ export function mountTherapistCapture() {
   });
   let R = {}; // dom refs
   let drawer = null;
+  let renderingLiveFrame = false;
   let authed = false; // gate: render() is a no-op until ensureTherapist() resolves (blocks cross-tab pre-auth paint)
 
   function loadRef() { S.reference = getReference(S.exId, S.patientId); }
@@ -84,6 +96,20 @@ export function mountTherapistCapture() {
       ? preferredId
       : (S.patientId && S.patients.some((p) => p.id === S.patientId) ? S.patientId : null);
     await loadPatientData(S.patientId);
+  }
+
+  async function refreshAiModels() {
+    S.aiModels = await fetchAiModels();
+    S.aiModelsLoaded = true;
+    resetValidationEngine();
+  }
+
+  function activeModelManifestForExercise(ex = getExercise(S.exId)) {
+    return selectModelManifestForExercise(ex, S.aiModels);
+  }
+
+  function exerciseForAiRuntime(ex = getExercise(S.exId)) {
+    return exerciseWithModelManifest(ex, activeModelManifestForExercise(ex));
   }
 
   async function addPatient() {
@@ -130,11 +156,27 @@ export function mountTherapistCapture() {
   function updateBoundaryUi(boundary, prefix = '') {
     S.boundary = boundary;
     S.boundaryFrame = boundary?.nextFrame || null;
+    updateAiReadinessFromBoundary(boundary);
     if (R.poseStatus) {
       R.poseStatus.textContent = prefix ? `${prefix} · ${boundaryText(boundary)}` : boundaryText(boundary);
       R.poseStatus.className = boundaryClass(boundary);
     }
     if (R.captureBtn) R.captureBtn.disabled = !(S.cameraOn && boundary?.status === 'inside');
+  }
+
+  function updateAiReadinessFromBoundary(boundary) {
+    S.aiReadiness = {
+      schemaId: boundary?.landmarkSchemaId || getExercise(S.exId)?.landmarkSchemaId || null,
+      trainable: boundary?.trainable === true,
+      scoreable: boundary?.scoreable === true,
+      missingPrimary: boundary?.primary ? [...(boundary.primary.missing || []), ...(boundary.primary.lowVisibility || [])] : [],
+      missingStabilizer: boundary?.stabilizer ? [...(boundary.stabilizer.missing || []), ...(boundary.stabilizer.lowVisibility || [])] : [],
+      dataQuality: boundary?.dataQuality || null,
+      hint: boundary?.hint || '',
+      hintTh: boundary?.hintTh || '',
+      primary: boundary?.primary || null,
+      stabilizer: boundary?.stabilizer || null,
+    };
   }
 
   function boundaryExercise() {
@@ -301,6 +343,220 @@ export function mountTherapistCapture() {
     const stamp = exportTimestamp();
     downloadTextFile(jsonl, `physioai_dataset_${safeId}_${stamp}.jsonl`, { type: 'application/x-ndjson' });
     toast(getLang() === 'th' ? 'Export dataset JSONL แล้ว' : 'Dataset JSONL exported.');
+  }
+
+  function datasetRecorder() {
+    if (!S.dataset.recorder) {
+      const ex = getExercise(S.exId);
+      S.dataset.recorder = createMotionDatasetRecorder({
+        exercise: ex,
+        landmarkSchemaId: ex.landmarkSchemaId,
+        labelTarget: S.dataset.labelTarget,
+        targetReps: S.dataset.targetReps,
+      });
+    }
+    return S.dataset.recorder;
+  }
+
+  function setDatasetLabelTarget(value) {
+    S.dataset.labelTarget = value;
+    S.dataset.recorder = null;
+    renderPanel();
+  }
+
+  function setDatasetTargetReps(value) {
+    const n = Math.max(1, Math.min(100, Number(value) || 10));
+    S.dataset.targetReps = n;
+    S.dataset.recorder = null;
+    renderPanel();
+  }
+
+  function startDatasetRecording() {
+    const th = getLang() === 'th';
+    if (!S.cameraOn || !engine.state.ready) {
+      toast(th ? 'เปิดกล้องก่อนเก็บข้อมูล' : 'Start the camera before recording a dataset.');
+      return;
+    }
+    if (!S.aiReadiness.trainable) {
+      toast(th ? (S.aiReadiness.hintTh || 'ยังไม่พร้อมเก็บข้อมูลฝึก AI') : (S.aiReadiness.hint || 'AI training readiness is not ready.'));
+      return;
+    }
+    const recorder = datasetRecorder();
+    recorder.start();
+    S.dataset.active = true;
+    renderPanel();
+    toast(th ? 'เริ่มเก็บข้อมูลฝึก AI' : 'AI dataset recording started.');
+  }
+
+  function stopDatasetRecording() {
+    const recorder = datasetRecorder();
+    if (S.dataset.active && recorder.frames.length) {
+      const row = recorder.completeRep({ reviewed: false, suggestedLabel: S.dataset.labelTarget });
+      S.dataset.rows = recorder.rows;
+      if (row.dataQuality !== 'usable') {
+        toast(getLang() === 'th' ? `rep ถูก reject: ${row.dataQuality}` : `Rep rejected: ${row.dataQuality}`);
+      }
+    }
+    recorder.stop();
+    S.dataset.active = false;
+    S.dataset.reviewOpen = true;
+    renderPanel();
+  }
+
+  function maybeRecordDatasetFrame({ landmarks, jointAngles, boundary, snapshot, now }) {
+    if (!S.dataset.active) return;
+    const recorder = datasetRecorder();
+    recorder.pushFrame({
+      timestamp: now,
+      landmarks,
+      jointAngles,
+      boundary,
+      phase: datasetPhaseFromSnapshot(snapshot),
+      safety: {
+        status: boundary?.readinessStatus,
+        dataQuality: boundary?.dataQuality,
+        schemaId: boundary?.landmarkSchemaId,
+        missingPrimary: S.aiReadiness.missingPrimary,
+        missingStabilizer: S.aiReadiness.missingStabilizer,
+      },
+    });
+    if (completedDatasetRepFromSnapshot(snapshot)) {
+      recorder.completeRep({ reviewed: false, suggestedLabel: S.dataset.labelTarget });
+      S.dataset.rows = recorder.rows;
+      if (S.dataset.rows.length >= S.dataset.targetReps) {
+        S.dataset.active = false;
+        recorder.stop();
+        S.dataset.reviewOpen = true;
+        toast(getLang() === 'th' ? 'เก็บครบ target reps แล้ว' : 'Target reps recorded.');
+      }
+      renderPanel();
+    }
+  }
+
+  function reviewDatasetRep(index, label) {
+    try {
+      const rows = S.dataset.rows.slice();
+      rows[index] = reviewDatasetRow(rows[index], label);
+      S.dataset.rows = rows;
+      renderPanel();
+    } catch {
+      toast(getLang() === 'th' ? 'label ไม่ถูกต้อง' : 'Invalid label.');
+    }
+  }
+
+  function stopDatasetPreview({ clearSequence = false, rerender = false } = {}) {
+    stopClipPlaybackState(S.dataset, cancelAnimationFrame);
+    if (clearSequence) {
+      S.dataset.previewSequence = null;
+      S.dataset.previewRowIndex = null;
+      S.dataset.previewFrameIdx = null;
+    }
+    if (rerender) renderPanel();
+  }
+
+  function drawDatasetPreviewFrame(sequence, index) {
+    const frame = sequence?.frames?.[index];
+    if (!frame || !R.canvas) return false;
+    const ctx = R.canvas.getContext('2d');
+    ctx.clearRect(0, 0, R.canvas.width, R.canvas.height);
+    const landmarks = frame.landmarks || [];
+    if (landmarks.length) {
+      drawer ||= makeDrawer(ctx);
+      drawer(landmarks, { color: '#2F5D50', accent: '#7BA88F' });
+      drawBoundaryBox(ctx, { status: frame.boundaryStatus === 'inside' ? 'inside' : 'outside' });
+      drawPrimaryAngleOverlay(ctx, landmarks, frame.jointAngles || {});
+    }
+    updateTable(frame.jointAngles || {});
+    const total = sequence.frames.length;
+    const phase = frame.phase || 'preview';
+    updateScore(null, `Preview rep ${(S.dataset.previewRowIndex ?? 0) + 1} · ${phase} · ${index + 1}/${total}`);
+    return true;
+  }
+
+  function stepDatasetPreview(now) {
+    const sequence = S.dataset.previewSequence;
+    const step = stepClipPlaybackState(S.dataset, sequence, now);
+    if (!step.active) return;
+    drawDatasetPreviewFrame(sequence, step.index);
+    if (step.done) {
+      stopDatasetPreview({ rerender: true });
+      return;
+    }
+    S.dataset.previewRaf = requestAnimationFrame(stepDatasetPreview);
+  }
+
+  function previewDatasetRep(index) {
+    const row = S.dataset.rows?.[index];
+    const sequence = buildDatasetPreviewSequence(row);
+    if (!sequence || !R.canvas) {
+      toast(getLang() === 'th' ? 'ไม่มี frame ให้ preview' : 'No dataset frame to preview.');
+      return;
+    }
+    stopClipPlayback();
+    stopDatasetPreview();
+    S.dataset.previewRowIndex = index;
+    S.dataset.previewSequence = sequence;
+    S.dataset.previewFrameIdx = 0;
+    drawDatasetPreviewFrame(sequence, 0);
+    if (sequence.frames.length > 1 && startClipPlaybackState(S.dataset, sequence)) {
+      renderPanel();
+      drawDatasetPreviewFrame(sequence, 0);
+      S.dataset.previewRaf = requestAnimationFrame(stepDatasetPreview);
+    }
+  }
+
+  function skipDatasetRep(index) {
+    const rows = S.dataset.rows.slice();
+    if (rows[index]) {
+      rows[index] = {
+        ...rows[index],
+        labelStatus: 'skipped',
+        trainable: false,
+        scoreable: false,
+      };
+      S.dataset.rows = rows;
+      renderPanel();
+    }
+  }
+
+  function toggleDatasetReview() {
+    S.dataset.reviewOpen = !S.dataset.reviewOpen;
+    renderPanel();
+  }
+
+  function exportDatasetBatchJsonl() {
+    const rows = (S.dataset.rows || []).filter(isReviewedTrainableRow);
+    if (!rows.length) {
+      toast(getLang() === 'th' ? 'ยังไม่มี reviewed/trainable rows ให้ export' : 'No reviewed/trainable rows to export.');
+      return;
+    }
+    const safeId = safeExportId(S.exId);
+    const stamp = exportTimestamp();
+    downloadTextFile(motionDatasetRowsToJsonl(rows), `physioai_dataset_batch_${safeId}_${stamp}.jsonl`, { type: 'application/x-ndjson' });
+    toast(getLang() === 'th' ? `Export ${rows.length} reviewed reps แล้ว` : `Exported ${rows.length} reviewed reps.`);
+  }
+
+  async function saveDatasetBatchToApi() {
+    const rows = S.dataset.rows || [];
+    if (!rows.some(isReviewedTrainableRow)) {
+      toast(getLang() === 'th' ? 'ยังไม่มี reviewed/trainable rows ให้บันทึก' : 'No reviewed/trainable rows to save.');
+      return;
+    }
+    const result = await saveReviewedDatasetRows({
+      rows,
+      patientId: S.patientId,
+      postDataset: apiPost,
+    });
+    if (result.ok) {
+      toast(getLang() === 'th'
+        ? `บันทึก dataset ${result.saved} reps แล้ว`
+        : `Saved ${result.saved} dataset reps.`);
+      return;
+    }
+    console.warn('dataset_save_failed', result.errors);
+    toast(getLang() === 'th'
+      ? `บันทึกได้ ${result.saved}/${result.attempted} reps`
+      : `Saved ${result.saved}/${result.attempted} dataset reps.`);
   }
 
   function updateClipPreviewControls() {
@@ -482,6 +738,18 @@ export function mountTherapistCapture() {
         savePlanSettings,
         togglePlan,
         updateTable,
+        setCaptureWorkflow,
+        setDatasetLabelTarget,
+        setDatasetTargetReps,
+        startDatasetRecording,
+        stopDatasetRecording,
+        previewDatasetRep,
+        reviewDatasetRep,
+        skipDatasetRep,
+        toggleDatasetReview,
+        exportDatasetBatchJsonl,
+        saveDatasetBatchToApi,
+        toggleAdvanced,
       },
     });
   }
@@ -506,13 +774,14 @@ export function mountTherapistCapture() {
       R.canvas.width = R.video.videoWidth; R.canvas.height = R.video.videoHeight;
       R.canvas.style.transform = ''; S.imageMode = false; // restore selfie-mirror after any image preview
       S.cameraOn = true; S.boundary = null; S.boundaryFrame = null;
-      S.landmarkFilter = createEmaLandmarkFilter({ minVisibility: getExercise(S.exId)?.minVisibility ?? 0.35 });
+      S.landmarkFilter = createEmaLandmarkFilter({ minVisibility: exerciseForAiRuntime()?.minVisibility ?? 0.35 });
       R.camBtn.className = 'btn danger'; R.camBtn.innerHTML = icon('close', { size: 16, color: '#FBFAF5' }) + ' ' + t('stopCamera');
       R.captureBtn.disabled = true;
       requestAnimationFrame(loop);
     } catch (e) { toast(t('cameraDenied')); }
   }
   function stopCam() {
+    stopDatasetPreview({ clearSequence: true });
     if (S.recording) {
       S.recording = null;
       updateRecordButton();
@@ -532,43 +801,60 @@ export function mountTherapistCapture() {
       const t0 = performance.now();
       const res = engine.detectVideo(R.video, performance.now());
       S.latency = Math.round(performance.now() - t0);
-      renderResult(res);
+      renderResult(res).catch((error) => {
+        console.warn('Capture render failed', error);
+      });
     }
     requestAnimationFrame(loop);
   }
 
-  function renderResult(res) {
+  async function renderResult(res) {
     if (activePendingSequence()) return;
-    const ctx = R.canvas.getContext('2d');
-    ctx.clearRect(0, 0, R.canvas.width, R.canvas.height);
-    const frame = prepareLiveCaptureFrame({
-      rawLandmarks: res?.landmarks?.[0] || null,
-      landmarkFilter: S.landmarkFilter,
-      exercise: getExercise(S.exId),
-      reference: S.reference,
-      mode: S.mode,
-      previousBoundaryFrame: S.boundaryFrame,
-      currentBoundary,
-      validationProcessorFor,
-      now: () => performance.now(),
-    });
-    if (!frame.hasPose) {
+    if (S.dataset.previewPlaying) return;
+    if (renderingLiveFrame) return;
+    renderingLiveFrame = true;
+    try {
+      const ctx = R.canvas.getContext('2d');
+      ctx.clearRect(0, 0, R.canvas.width, R.canvas.height);
+      const exercise = exerciseForAiRuntime();
+      const frame = await prepareLiveCaptureFrameWithAi({
+        rawLandmarks: res?.landmarks?.[0] || null,
+        landmarkFilter: S.landmarkFilter,
+        exercise,
+        reference: S.reference,
+        mode: S.mode,
+        previousBoundaryFrame: S.boundaryFrame,
+        currentBoundary,
+        validationProcessorFor,
+        now: () => performance.now(),
+      });
+      if (!frame.hasPose) {
+        drawBoundaryBox(ctx, frame.boundary);
+        updateBoundaryUi(frame.boundary, t('noPose'));
+        updateTable(null); updateScore(null); return;
+      }
+      updateBoundaryUi(frame.boundary, `${frame.live.length} pts`);
+      if (frame.snapshot) {
+        if (frame.ghostLandmarks) drawer(frame.ghostLandmarks, { ghost: true });
+        updateScore(frame.snapshot.overallScore, validationFeedbackText(frame.snapshot, frame.snapshot.cue?.text, { lang: getLang() }));
+      } else if (frame.validationUnavailable) {
+        updateScore(null, currentCaptureHint(exercise));
+      } else updateScore(null);
+      drawer(frame.live, { color: frame.colors[0], accent: frame.colors[1] });
       drawBoundaryBox(ctx, frame.boundary);
-      updateBoundaryUi(frame.boundary, t('noPose'));
-      updateTable(null); updateScore(null); return;
+      drawPrimaryAngleOverlay(ctx, frame.live, frame.liveAngles);
+      updateTable(frame.liveAngles);
+      maybeRecordSequenceFrame({ landmarks: frame.live, jointAngles: frame.liveAngles, boundary: frame.boundary, now: performance.now() });
+      maybeRecordDatasetFrame({
+        landmarks: frame.live,
+        jointAngles: frame.liveAngles,
+        boundary: frame.boundary,
+        snapshot: frame.snapshot,
+        now: performance.now(),
+      });
+    } finally {
+      renderingLiveFrame = false;
     }
-    updateBoundaryUi(frame.boundary, `${frame.live.length} pts`);
-    if (frame.snapshot) {
-      if (frame.ghostLandmarks) drawer(frame.ghostLandmarks, { ghost: true });
-      updateScore(frame.snapshot.overallScore, frame.snapshot.cue?.text);
-    } else if (frame.validationUnavailable) {
-      updateScore(null, currentCaptureHint(getExercise(S.exId)));
-    } else updateScore(null);
-    drawer(frame.live, { color: frame.colors[0], accent: frame.colors[1] });
-    drawBoundaryBox(ctx, frame.boundary);
-    drawPrimaryAngleOverlay(ctx, frame.live, frame.liveAngles);
-    updateTable(frame.liveAngles);
-    maybeRecordSequenceFrame({ landmarks: frame.live, jointAngles: frame.liveAngles, boundary: frame.boundary, now: performance.now() });
   }
 
   function drawPrimaryAngleOverlay(ctx, landmarks, liveAngles) {
@@ -686,6 +972,18 @@ export function mountTherapistCapture() {
   }
 
   // ── Actions ─────────────────────────────────────────────────
+  function setCaptureWorkflow(workflow) {
+    S.captureWorkflow = ['reference', 'dataset', 'validate'].includes(workflow) ? workflow : 'reference';
+    if (S.captureWorkflow !== 'dataset') stopDatasetPreview({ clearSequence: true });
+    setMode(S.captureWorkflow === 'validate' ? 'validate' : 'setup');
+    renderPanel();
+  }
+
+  function toggleAdvanced() {
+    S.advancedOpen = !S.advancedOpen;
+    renderPanel();
+  }
+
   function setMode(m) {
     S.mode = m;
     R.modeBadge.textContent = m.toUpperCase(); R.modeBadge.className = 'pill ' + (m === 'setup' ? 'brand' : 'good');
@@ -699,7 +997,7 @@ export function mountTherapistCapture() {
   }
 
   function validationProcessorFor(ex, ref) {
-    return getValidationFrameProcessor(S, ex, ref, {
+    return getValidationFrameProcessor(S, exerciseForAiRuntime(ex), ref, {
       fallbackExerciseId: S.exId,
       lang: getLang,
     });
@@ -990,6 +1288,14 @@ export function mountTherapistCapture() {
       toast(getLang() === 'th' ? 'โหลดรายชื่อผู้ป่วยไม่สำเร็จ' : 'Could not load patients');
       S.patients = [];
       S.patientId = null;
+    }
+    try {
+      await refreshAiModels();
+    } catch {
+      if (disposed) return;
+      S.aiModels = [];
+      S.aiModelsLoaded = false;
+      toast(getLang() === 'th' ? 'โหลด metadata โมเดล AI ไม่สำเร็จ' : 'Could not load AI model metadata');
     }
     if (disposed) return;
     render();

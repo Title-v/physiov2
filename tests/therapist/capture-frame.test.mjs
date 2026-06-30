@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   CAPTURE_DEFAULT_COLORS,
   prepareLiveCaptureFrame,
+  prepareLiveCaptureFrameWithAi,
 } from '../../src/app/therapist/capture/captureFrame.js';
 
 test('prepareLiveCaptureFrame resets smoothing and evaluates reset boundary when no pose is visible', () => {
@@ -85,6 +86,44 @@ test('prepareLiveCaptureFrame runs motion validation preview and returns score c
   assert.deepEqual(result.snapshot.frame.previousBoundaryFrame, { previous: true });
   assert.equal(result.ghostLandmarks, ghostLandmarks);
   assert.deepEqual(result.colors, ['#9C7344', '#C8955A']);
+});
+
+test('prepareLiveCaptureFrameWithAi uses async validation classifier path when available', async () => {
+  const live = [{ x: 0.5, y: 0.5, visibility: 1 }];
+  const calls = [];
+  const result = await prepareLiveCaptureFrameWithAi({
+    rawLandmarks: live,
+    landmarkFilter: { smooth: (landmarks) => landmarks },
+    exercise: { id: 'shoulder', landmarkSchemaId: 'right_arm.v1' },
+    reference: { kind: 'motion_cycle' },
+    mode: 'validate',
+    previousBoundaryFrame: { previous: true },
+    now: () => 2222,
+    currentBoundary: () => ({ status: 'inside', trainable: true, scoreable: true }),
+    jointAngleCalculatorDetailedImpl: () => ({
+      angles: { right_shoulder: 88 },
+      meta: { usableJointRatio: 1 },
+    }),
+    validationProcessorFor: () => ({
+      async processPracticeFrameWithAi(frame) {
+        calls.push(frame);
+        return {
+          snapshot: {
+            overallScore: 82,
+            aiSignal: { phase: 'target', quality: 'good', confidence: 0.9 },
+            aiRepCount: 1,
+          },
+        };
+      },
+    }),
+  });
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].timestamp, 2222);
+  assert.deepEqual(calls[0].liveAngles, { right_shoulder: 88 });
+  assert.equal(result.snapshot.aiSignal.quality, 'good');
+  assert.equal(result.snapshot.aiRepCount, 1);
+  assert.deepEqual(result.colors, ['#2F5D50', '#7BA88F']);
 });
 
 test('prepareLiveCaptureFrame marks validation unavailable when reference cannot create a processor', () => {

@@ -1,5 +1,10 @@
 import { buildMotionClipEditorModel } from './previewController.js';
 import { SEQUENCE_MIN_FRAMES } from './sequenceRecorder.js';
+import { renderDatasetRecorderPanel } from './datasetRecorderPanel.js';
+import { renderDatasetReviewPanel } from './datasetReviewPanel.js';
+import { renderAiExerciseWizard } from './aiExerciseWizard.js';
+import { renderModelValidationPanel } from './modelValidationPanel.js';
+import { exerciseWithModelManifest, selectModelManifestForExercise } from '../../../../shared/core/ai-models.js';
 
 export function renderCapturePanel({
   state: S,
@@ -53,11 +58,25 @@ export function renderCapturePanel({
     resetRomMeasurement,
     savePlanSettings,
     togglePlan,
+    setCaptureWorkflow,
+    setDatasetLabelTarget,
+    setDatasetTargetReps,
+    startDatasetRecording,
+    stopDatasetRecording,
+    previewDatasetRep,
+    reviewDatasetRep,
+    skipDatasetRep,
+    toggleDatasetReview,
+    exportDatasetBatchJsonl,
+    saveDatasetBatchToApi,
+    toggleAdvanced,
   } = actions;
 
   loadRef();
   const panel = document.getElementById('panel'); if (!panel) return; clear(panel);
-  const ex = getExercise(S.exId);
+  const baseExercise = getExercise(S.exId);
+  const activeModelManifest = selectModelManifestForExercise(baseExercise, S.aiModels);
+  const ex = exerciseWithModelManifest(baseExercise, activeModelManifest);
   const lang = getLang();
   if (S.captureDraft?.exerciseId !== S.exId) S.captureDraft = null;
   if (S.pendingSequence?.exerciseId !== S.exId) {
@@ -66,6 +85,24 @@ export function renderCapturePanel({
     stopClipPlayback();
   }
   updateCaptureButtonLabel();
+
+  const workflowTabs = h('div', { class: 'card col gap10' },
+    h('div', { class: 'eyebrow' }, lang === 'th' ? 'Workflow' : 'Workflow'),
+    h('div', { class: 'mode-toggle', style: { width: '100%' } },
+      h('button', {
+        class: S.captureWorkflow === 'reference' ? 'active' : '',
+        onclick: () => setCaptureWorkflow('reference'),
+      }, lang === 'th' ? 'บันทึกท่าให้คนไข้' : 'Reference'),
+      h('button', {
+        class: S.captureWorkflow === 'dataset' ? 'active' : '',
+        onclick: () => setCaptureWorkflow('dataset'),
+      }, lang === 'th' ? 'เก็บข้อมูลฝึก AI' : 'Dataset'),
+      h('button', {
+        class: S.captureWorkflow === 'validate' ? 'active' : '',
+        onclick: () => setCaptureWorkflow('validate'),
+      }, lang === 'th' ? 'ทดสอบการตรวจท่า' : 'Validate')),
+    h('button', { class: 'mini', onclick: toggleAdvanced }, S.advancedOpen ? (lang === 'th' ? 'ซ่อน Advanced' : 'Hide advanced') : (lang === 'th' ? 'เปิด Advanced' : 'Show advanced')),
+  );
 
   const inputStyle = { width: '100%', padding: '8px 10px', border: '1px solid var(--line)', borderRadius: '9px', background: 'var(--surface)', font: 'inherit', fontSize: '13px', color: 'inherit', boxSizing: 'border-box' };
   function newExerciseForm(lng) {
@@ -112,7 +149,7 @@ export function renderCapturePanel({
 
   const exerciseChoices = getExercises();
   const exercisePill = (e) => {
-    const pill = h('button', { class: 'pill' + (e.id === S.exId ? ' brand' : ''), onclick: () => { S.exId = e.id; S.newEx = false; S.captureDraft = null; S.landmarkFilter?.reset(); renderCapturePanel({ state: S, refs: R, dom, data, helpers, actions }); } }, exLabel(e, t));
+    const pill = h('button', { class: 'pill' + (e.id === S.exId ? ' brand' : ''), onclick: () => { S.exId = e.id; S.newEx = false; S.captureDraft = null; S.dataset.recorder = null; S.dataset.active = false; S.landmarkFilter?.reset(); renderCapturePanel({ state: S, refs: R, dom, data, helpers, actions }); } }, exLabel(e, t));
     if (e.source !== 'custom') return pill;
     const del = h('button', { class: 'pill', title: lang === 'th' ? 'ลบท่านี้' : 'Delete', style: { padding: '6px 8px' }, onclick: () => { deleteCustomExercise(e.id); S.captureDraft = null; if (S.exId === e.id) S.exId = EXERCISES[0].id; S.landmarkFilter?.reset(); renderCapturePanel({ state: S, refs: R, dom, data, helpers, actions }); } }, '×');
     return h('span', { class: 'row', style: { alignItems: 'center' } }, pill, del);
@@ -258,7 +295,47 @@ export function renderCapturePanel({
     exportSkeletonParameters,
     exportMotionDatasetJsonl,
   });
-  panel.append(exSel, angleCard, ...(clipEditor ? [clipEditor] : []), scoreCard, table, presCard);
+  const datasetRecorder = renderDatasetRecorderPanel({
+    S,
+    h,
+    icon,
+    lang,
+    actions: {
+      setDatasetLabelTarget,
+      setDatasetTargetReps,
+      startDatasetRecording,
+      stopDatasetRecording,
+      exportDatasetBatchJsonl,
+      saveDatasetBatchToApi,
+    },
+  });
+  const datasetReview = renderDatasetReviewPanel({
+    S,
+    h,
+    lang,
+    actions: {
+      reviewDatasetRep,
+      previewDatasetRep,
+      skipDatasetRep,
+      toggleDatasetReview,
+    },
+  });
+  const workflowPanels = S.captureWorkflow === 'dataset'
+    ? [datasetRecorder, datasetReview]
+    : S.captureWorkflow === 'validate'
+      ? [renderModelValidationPanel({ exercise: ex, reference: S.reference, readiness: S.aiReadiness, modelManifest: activeModelManifest, h, lang }), scoreCard, table]
+      : [renderAiExerciseWizard({
+        exercise: ex,
+        reference: S.reference,
+        datasetRows: S.dataset.rows || [],
+        readiness: S.aiReadiness,
+        modelManifest: activeModelManifest,
+        h,
+        lang,
+        actions: { setCaptureWorkflow },
+      }), ...(clipEditor ? [clipEditor] : []), scoreCard, presCard];
+  const advancedPanels = S.advancedOpen && S.captureWorkflow !== 'validate' ? [table] : [];
+  panel.append(workflowTabs, exSel, angleCard, ...workflowPanels, ...advancedPanels);
   if (S.reference) actions.updateTable(null);
   renderClipPreview();
 }

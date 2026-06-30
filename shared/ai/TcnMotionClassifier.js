@@ -1,7 +1,8 @@
-import { featureVectorsFromWindow, extractMotionFeatureWindow } from './MotionFeatureExtractor.js';
+import { expectedMotionFeatureSizeForSchema, featureVectorsFromWindow, extractMotionFeatureWindow } from './MotionFeatureExtractor.js';
+import { resolveBodyRegionLandmarkSchema } from './BodyRegionLandmarkSchema.js';
 
 export const TCN_PHASES = ['rest', 'moving_to_target', 'target', 'returning'];
-export const TCN_QUALITIES = ['good', 'incomplete', 'wrong_path', 'unstable', 'out_of_frame'];
+export const TCN_QUALITIES = ['good', 'incomplete', 'wrong_path', 'unstable'];
 
 const PHASE_ALIASES = {
   rest_start: 'rest',
@@ -52,6 +53,7 @@ function vectorFromOutput(output) {
 }
 
 function maxIndex(vector) {
+  if (!Array.isArray(vector) || !vector.length) return { index: null, confidence: 0 };
   let bestIndex = 0;
   let bestValue = -Infinity;
   vector.forEach((value, index) => {
@@ -63,32 +65,42 @@ function maxIndex(vector) {
   return { index: bestIndex, confidence: clamp01(bestValue) };
 }
 
+function bestEnum(vector, allowed) {
+  const best = maxIndex(vector);
+  const value = Number.isInteger(best.index) ? allowed[best.index] : null;
+  return value ? { value, confidence: best.confidence } : null;
+}
+
 export function normalizeAiSignal(raw) {
   if (!raw) return null;
   if (Array.isArray(raw)) {
     if (Array.isArray(raw[0]) || Array.isArray(raw[1])) {
-      const phaseMax = maxIndex(vectorFromOutput(raw[0]));
-      const qualityMax = maxIndex(vectorFromOutput(raw[1]));
+      const phaseMax = bestEnum(vectorFromOutput(raw[0]), TCN_PHASES);
+      const qualityMax = bestEnum(vectorFromOutput(raw[1]), TCN_QUALITIES);
+      if (!phaseMax || !qualityMax) return null;
       return {
-        phase: TCN_PHASES[phaseMax.index] || 'rest',
-        quality: TCN_QUALITIES[qualityMax.index] || 'good',
+        phase: phaseMax.value,
+        quality: qualityMax.value,
         confidence: Math.min(phaseMax.confidence, qualityMax.confidence),
       };
     }
     const flat = raw.flat(Infinity);
     if (!flat.length) return null;
+    const phase = indexToEnum(flat[0], TCN_PHASES);
+    const quality = indexToEnum(flat[1], TCN_QUALITIES);
+    if (!phase || !quality) return null;
     return {
-      phase: indexToEnum(flat[0], TCN_PHASES) || 'rest',
-      quality: indexToEnum(flat[1], TCN_QUALITIES) || 'good',
+      phase,
+      quality,
       confidence: clamp01(flat[2] ?? 0),
     };
   }
   const phase = normalizeEnum(raw.phase, TCN_PHASES, PHASE_ALIASES, null);
   const quality = normalizeEnum(raw.quality, TCN_QUALITIES, {}, null);
-  if (!phase && !quality) return null;
+  if (!phase || !quality) return null;
   return {
-    phase: phase || 'rest',
-    quality: quality || 'good',
+    phase,
+    quality,
     confidence: clamp01(raw.confidence ?? raw.score ?? 0),
   };
 }
@@ -109,11 +121,59 @@ export function createTcnMotionClassifier({
     try {
       const model = await load();
       if (!model) return null;
-      const featureWindow = extractMotionFeatureWindow(frames, {
+      const manifest = model.__physioAiManifest || {};
+      if (model.__physioAiManifest && manifest.approved !== true) {
+        logger?.warn?.('TCN motion classifier is not approved; falling back to rule-based scoring.');
+        return null;
+      }
+      const requestedSchema = options.landmarkSchemaId || options.exercise?.landmarkSchemaId || extractorOptions.landmarkSchemaId;
+      const manifestSchema = manifest.landmarkSchemaId
+        ? resolveBodyRegionLandmarkSchema(manifest.landmarkSchemaId, { fallback: false })
+        : null;
+      if (model.__physioAiManifest && !manifestSchema) {
+        logger?.warn?.('TCN motion classifier manifest is missing or using an unknown landmark schema.');
+        return null;
+      }
+      if (requestedSchema && !resolveBodyRegionLandmarkSchema(requestedSchema, { fallback: false })) {
+        logger?.warn?.(`TCN motion classifier requested unknown landmark schema: ${requestedSchema}.`);
+        return null;
+      }
+      if (requestedSchema && manifest.landmarkSchemaId && requestedSchema !== manifest.landmarkSchemaId) {
+        logger?.warn?.(`TCN motion classifier schema mismatch: exercise ${requestedSchema}, model ${manifest.landmarkSchemaId}.`);
+        return null;
+      }
+      const extractorConfig = {
         ...extractorOptions,
         ...(options.extractorOptions || {}),
-      });
-      const vectors = featureWindow.map((features) => features.featureVector);
+        landmarkSchemaId: manifest.landmarkSchemaId || requestedSchema || undefined,
+      };
+      if (model.__physioAiManifest) {
+        extractorConfig.landmarkSchemaId = manifest.landmarkSchemaId;
+        extractorConfig.joints = manifest.jointNames || undefined;
+      }
+      const featureWindow = extractMotionFeatureWindow(frames, extractorConfig);
+      let predictionWindow = featureWindow;
+      if (model.__physioAiManifest) {
+        const inputShape = manifest.inputShape;
+        if (!Array.isArray(inputShape) || inputShape.length !== 2) {
+          logger?.warn?.('TCN motion classifier manifest is missing inputShape.');
+          return null;
+        }
+        const windowSize = Number(inputShape[0]);
+        const featureSize = Number(inputShape[1]);
+        const expectedFeatureSize = expectedMotionFeatureSizeForSchema({ landmarkSchema: manifestSchema });
+        if (!Number.isInteger(windowSize) || windowSize <= 0 || featureSize !== expectedFeatureSize) {
+          logger?.warn?.(`TCN motion classifier inputShape mismatch for ${manifest.landmarkSchemaId}.`);
+          return null;
+        }
+        if (featureWindow.length < windowSize) return null;
+        predictionWindow = featureWindow.slice(-windowSize);
+        if (predictionWindow.some((features) => features.schemaMissing || features.featureVector.length !== featureSize)) {
+          logger?.warn?.('TCN motion classifier feature window does not match manifest inputShape.');
+          return null;
+        }
+      }
+      const vectors = predictionWindow.map((features) => features.featureVector);
       let raw = null;
       if (typeof model.predictMotion === 'function') {
         raw = await model.predictMotion({ frames, featureWindow, vectors, options });

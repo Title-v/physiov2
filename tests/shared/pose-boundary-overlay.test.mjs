@@ -52,7 +52,7 @@ test('evaluateBoundaryBox detects inside, outside, no-pose, and missing visibili
   assert.equal(missing.missingNames?.includes?.('left_elbow') ?? missing.missing.length > 0, true);
 });
 
-test('evaluateBoundaryBox honors exercise required joints and min visibility metadata', () => {
+test('evaluateBoundaryBox prefers schema model input landmarks for boundary readiness', () => {
   const exercise = {
     id: 'custom_visibility',
     primaryJoint: 'right_shoulder',
@@ -66,13 +66,21 @@ test('evaluateBoundaryBox honors exercise required joints and min visibility met
 
   assert.equal(boundary.status, 'outside');
   assert.deepEqual(boundary.missingNames, ['right_elbow']);
-  assert.deepEqual(boundaryKeyNames(boundary.keyIndices), ['right_shoulder', 'right_elbow', 'right_hip']);
+  assert.deepEqual(boundaryKeyNames(boundary.keyIndices), [
+    'right_shoulder',
+    'right_elbow',
+    'right_wrist',
+    'left_shoulder',
+    'right_hip',
+  ]);
 });
 
 function boundaryKeyNames(indices) {
   const byIndex = new Map([
+    [11, 'left_shoulder'],
     [12, 'right_shoulder'],
     [14, 'right_elbow'],
+    [16, 'right_wrist'],
     [24, 'right_hip'],
   ]);
   return indices.map((index) => byIndex.get(index)).filter(Boolean);

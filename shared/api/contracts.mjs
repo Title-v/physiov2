@@ -122,6 +122,39 @@ export const API_ENDPOINTS = [
     body: 'session document',
     response: '201 saved session document',
   },
+  {
+    method: 'GET',
+    path: '/datasets',
+    auth: true,
+    roles: ['therapist'],
+    query: 'patientId?, exerciseId?, landmarkSchemaId?',
+    response: '[reviewed trainable dataset row]',
+  },
+  {
+    method: 'POST',
+    path: '/datasets',
+    auth: true,
+    roles: ['therapist'],
+    query: 'patientId? for therapist-linked patient dataset rows',
+    body: 'reviewed trainable dataset row',
+    response: '201 saved dataset row',
+  },
+  {
+    method: 'GET',
+    path: '/ai-models',
+    auth: true,
+    roles: ['therapist'],
+    query: 'exerciseId?, landmarkSchemaId?',
+    response: '[AI model manifest metadata]',
+  },
+  {
+    method: 'POST',
+    path: '/ai-models',
+    auth: true,
+    roles: ['therapist'],
+    body: 'AI model manifest metadata',
+    response: '201 saved model metadata',
+  },
 ];
 
 export function endpointKey(endpoint) {

@@ -1,5 +1,6 @@
 import { jointAngleCalculatorDetailed } from '../ai/JointAngleCalculator.js';
 import { evaluateBoundaryBox } from '../ai/BoundaryBoxGate.js';
+import { createAiPhaseRepCounter } from '../ai/RepCounter.js';
 import { overlayJointsForExercise } from '../core/patient-exercises.js';
 
 export function ghostLandmarksForSnapshot(reference, snapshot) {
@@ -17,6 +18,9 @@ export function createPracticeFrameProcessor({
   motionClassifier = null,
   classifierWindowSize = 30,
   classifierOptions = {},
+  aiRepCounter = createAiPhaseRepCounter({
+    minConfidence: classifierOptions.minConfidence ?? 0.75,
+  }),
   overlayJoints = null,
   timestampNow = () => (globalThis.performance?.now ? globalThis.performance.now() : Date.now()),
 } = {}) {
@@ -71,7 +75,7 @@ export function createPracticeFrameProcessor({
     };
   }
 
-  function commitPracticeFrame(prepared, aiSignal = null) {
+  function commitPracticeFrame(prepared, aiSignal = null, aiRepSnapshot = null) {
     if (!prepared?.hasPose) return prepared;
     const snapshot = motionEngine
       ? motionEngine.pushFrame({
@@ -81,8 +85,17 @@ export function createPracticeFrameProcessor({
         angleMeta: prepared.angleMeta,
         boundary: prepared.boundary,
         aiSignal,
+        aiRepSnapshot,
       })
       : null;
+    const nextSnapshot = snapshot && aiRepSnapshot
+      ? {
+        ...snapshot,
+        aiRepCounter: aiRepSnapshot,
+        aiRepCount: aiRepSnapshot.reps,
+        aiCompletedRep: aiRepSnapshot.completedRep || null,
+      }
+      : snapshot;
 
     return {
       hasPose: true,
@@ -90,9 +103,9 @@ export function createPracticeFrameProcessor({
       nextBoundaryFrame: prepared.nextBoundaryFrame,
       liveAngles: prepared.liveAngles,
       angleMeta: prepared.angleMeta,
-      snapshot,
+      snapshot: nextSnapshot,
       overlayJoints: prepared.overlayJoints,
-      ghostLandmarks: ghostLandmarksForSnapshot(reference, snapshot),
+      ghostLandmarks: ghostLandmarksForSnapshot(reference, nextSnapshot),
       aiSignal,
     };
   }
@@ -104,9 +117,21 @@ export function createPracticeFrameProcessor({
 
   async function processPracticeFrameWithAi(args = {}) {
     const prepared = preparePracticeFrame(args);
-    if (!prepared.hasPose) return prepared;
+    if (!prepared.hasPose) {
+      aiRepCounter?.reset?.();
+      return prepared;
+    }
     let aiSignal = args.aiSignal || null;
-    if (!aiSignal && typeof motionClassifier?.predict === 'function') {
+    const safetyOk = prepared.boundary?.scoreable !== false && prepared.boundary?.trainable !== false;
+    let aiRepSnapshot = null;
+    if (!safetyOk) {
+      aiSignal = null;
+      classifierWindow = [];
+      aiRepSnapshot = aiRepCounter?.push?.({
+        safetyOk: false,
+        timestamp: prepared.timestamp,
+      }) || null;
+    } else if (!aiSignal && typeof motionClassifier?.predict === 'function') {
       classifierWindow.push({
         t: prepared.timestamp,
         timestamp: prepared.timestamp,
@@ -114,15 +139,31 @@ export function createPracticeFrameProcessor({
         jointAngles: prepared.liveAngles,
         angles: prepared.liveAngles,
         boundaryStatus: prepared.boundary?.status || 'unknown',
+        landmarkSchemaId: prepared.boundary?.landmarkSchemaId || exercise.landmarkSchemaId,
+        dataQuality: prepared.boundary?.dataQuality || null,
       });
       classifierWindow = classifierWindow.slice(-Math.max(1, classifierWindowSize));
-      aiSignal = await motionClassifier.predict(classifierWindow.slice(), classifierOptions).catch(() => null);
+      aiSignal = await motionClassifier.predict(classifierWindow.slice(), {
+        exercise,
+        landmarkSchemaId: prepared.boundary?.landmarkSchemaId || exercise.landmarkSchemaId,
+        ...classifierOptions,
+      }).catch(() => null);
     }
-    return commitPracticeFrame(prepared, aiSignal);
+    if (!aiRepSnapshot && aiSignal) {
+      aiRepSnapshot = aiRepCounter?.push?.({
+        phase: aiSignal.phase,
+        quality: aiSignal.quality,
+        confidence: aiSignal.confidence,
+        safetyOk,
+        timestamp: prepared.timestamp,
+      }) || null;
+    }
+    return commitPracticeFrame(prepared, aiSignal, aiRepSnapshot);
   }
 
   function resetAiWindow() {
     classifierWindow = [];
+    aiRepCounter?.reset?.();
   }
 
   return {

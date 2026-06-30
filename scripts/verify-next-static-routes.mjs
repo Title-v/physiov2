@@ -70,7 +70,7 @@ await workspaceContentIncludes('native capture validation controller keeps share
 await workspaceContentIncludes('native capture controller keeps boundary gate', ['src', 'app', 'therapist', 'capture', 'captureController.js'], 'evaluateBoundaryBox');
 await workspaceContentIncludes('native capture reference saver keeps trajectory builders', ['src', 'app', 'therapist', 'capture', 'referenceSaver.js'], 'buildReferenceTrajectory');
 await workspaceContentIncludes('native plan page uses plan client', ['src', 'app', 'therapist', 'plan', 'page.jsx'], 'TherapistPlanClient');
-await workspaceContentIncludes('native plan client keeps full plan save path', ['src', 'app', 'therapist', 'plan', 'TherapistPlanClient.jsx'], 'savePlanFull(patientId, plan)');
+await workspaceContentIncludes('native plan client keeps full plan save path', ['src', 'app', 'therapist', 'plan', 'TherapistPlanClient.jsx'], 'savePlanFull(patientId,');
 await workspaceContentIncludes('native record page uses record client', ['src', 'app', 'therapist', 'record', 'page.jsx'], 'TherapistRecordClient');
 await workspaceContentIncludes('native record client keeps boundary recording path', ['src', 'app', 'therapist', 'record', 'TherapistRecordClient.jsx'], 'evaluateBoundaryBox');
 await workspaceContentIncludes('native dashboard page uses dashboard client', ['src', 'app', 'therapist', 'dashboard', 'page.jsx'], 'TherapistDashboardClient');

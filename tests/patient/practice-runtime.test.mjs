@@ -88,3 +88,87 @@ test('createPatientPracticeRuntime stops camera when active guard fails after pe
   assert.equal(started, false);
   assert.equal(stopped, true);
 });
+
+test('createPatientPracticeRuntime feeds patient frames through optional AI classifier path', async () => {
+  let rafCallback = null;
+  let classifierCalled = false;
+  let processorReceivedClassifier = false;
+  let modelBaseUrl = null;
+  const frames = [];
+  const poseEngine = {
+    state: { ready: true },
+    init: async () => {},
+    detectVideo: () => ({ landmarks: [[{ x: 0.5, y: 0.5, visibility: 1 }]] }),
+  };
+  const runtime = createPatientPracticeRuntime({
+    poseEngine,
+    requestFrame: (fn) => {
+      rafCallback = fn;
+      return 1;
+    },
+    cancelFrame: () => {},
+    cameraStart: async () => {},
+    cameraStop: () => {},
+    makePoseDrawer: () => () => {},
+    drawBoundary: () => {},
+    drawAngles: () => {},
+    motionEngineFactory: () => ({ finishSummary: () => ({ overallScore: 88 }) }),
+    modelRegistryFactory: ({ baseUrl }) => {
+      modelBaseUrl = baseUrl;
+      return { baseUrl, load: async () => null };
+    },
+    motionClassifierFactory: ({ registry, extractorOptions }) => ({
+      registry,
+      extractorOptions,
+      async predict() {
+        classifierCalled = true;
+        return { phase: 'moving_to_target', quality: 'good', confidence: 0.92 };
+      },
+    }),
+    frameProcessorFactory: ({ motionClassifier, classifierOptions }) => {
+      processorReceivedClassifier = !!motionClassifier && classifierOptions.landmarkSchemaId === 'right_arm.v1';
+      return {
+        async processPracticeFrameWithAi(args) {
+          const aiSignal = await motionClassifier.predict([args]);
+          return {
+            hasPose: true,
+            boundary: { status: 'inside' },
+            nextBoundaryFrame: { x: 0.1 },
+            liveAngles: { right_shoulder: 90 },
+            snapshot: { phase: aiSignal.phase, overallScore: 92, aiSignal },
+            overlayJoints: ['right_shoulder'],
+            ghostLandmarks: null,
+          };
+        },
+        processPracticeFrame: () => {
+          throw new Error('sync fallback should not be used');
+        },
+      };
+    },
+    landmarkFilterFactory: () => ({ smooth: (landmarks) => landmarks, reset: () => {} }),
+    onFrame: (frame) => frames.push(frame),
+  });
+
+  const started = await runtime.start({
+    exercise: {
+      id: 'shoulder',
+      reps: 1,
+      sets: 1,
+      landmarkSchemaId: 'right_arm.v1',
+      activeModelId: 'right_arm_tcn_v1',
+    },
+    reference: { kind: 'motion_cycle', referenceSequence: { frames: [{ p: 0 }, { p: 1 }] } },
+    video: { currentTime: 1 },
+    canvas: fakeCanvas(),
+  });
+  await rafCallback();
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(started, true);
+  assert.equal(modelBaseUrl, '/shared/models/right_arm_tcn_v1');
+  assert.equal(processorReceivedClassifier, true);
+  assert.equal(classifierCalled, true);
+  assert.equal(frames.length, 1);
+  assert.equal(frames[0].snapshot.aiSignal.quality, 'good');
+  assert.equal(runtime.getState().boundaryFrame.x, 0.1);
+});

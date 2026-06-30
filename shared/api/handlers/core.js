@@ -62,6 +62,37 @@ export function sessionFromRow(row) {
   };
 }
 
+export function datasetFromRow(row) {
+  const data = row.data || {};
+  return {
+    id: row.id || data.id,
+    patientId: row.patient_id || data.patientId || null,
+    therapistId: row.therapist_id || data.therapistId || null,
+    exerciseId: row.exercise_id || data.exerciseId,
+    landmarkSchemaId: row.landmark_schema_id || data.landmarkSchemaId,
+    labelStatus: row.label_status || data.labelStatus,
+    dataQuality: row.data_quality || data.dataQuality,
+    trainable: row.trainable ?? data.trainable,
+    ...data,
+    createdAt: data.createdAt || row.created_at || null,
+  };
+}
+
+export function aiModelFromRow(row) {
+  const data = row.data || {};
+  return {
+    id: row.id || data.id || data.modelId,
+    therapistId: row.therapist_id || data.therapistId || null,
+    exerciseId: row.exercise_id || data.exerciseId || null,
+    landmarkSchemaId: row.landmark_schema_id || data.landmarkSchemaId,
+    version: row.version || data.version,
+    approved: row.approved ?? data.approved === true,
+    ...data,
+    updatedAt: data.updatedAt || row.updated_at || null,
+    createdAt: data.createdAt || row.created_at || null,
+  };
+}
+
 export function isoFromEpochMs(value) {
   const n = Number(value);
   if (Number.isFinite(n)) return new Date(n).toISOString();
@@ -75,8 +106,10 @@ export default {
   cleanPlan,
   isoFromEpochMs,
   normalizeAuthError,
+  aiModelFromRow,
   planFromRow,
   publicUser,
+  datasetFromRow,
   referenceFromRow,
   sessionFromRow,
 };

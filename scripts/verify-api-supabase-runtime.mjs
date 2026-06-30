@@ -23,7 +23,7 @@ const env = {
 
 const config = supabaseConfig(env);
 check('config reads url and keys', config.url === env.SUPABASE_URL && config.publishableKey === 'publishable' && config.serviceRoleKey === 'service');
-check('config applies table defaults', config.tables.profiles === 'app_profiles' && config.tables.sessions === 'sessions');
+check('config applies table defaults', config.tables.profiles === 'app_profiles' && config.tables.sessions === 'sessions' && config.tables.datasets === 'motion_datasets' && config.tables.aiModels === 'ai_models');
 
 const createdClients = [];
 const supabase = createSupabaseRuntime({

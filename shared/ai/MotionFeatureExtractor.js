@@ -1,4 +1,6 @@
 import { landmarkToTuple } from './MotionDataset.js';
+import { getBodyRegionLandmarkSchema, resolveBodyRegionLandmarkSchema } from './BodyRegionLandmarkSchema.js';
+import { idx } from './Landmarks.js';
 
 export const MOTION_FEATURE_SCHEMA_VERSION = 1;
 export const DEFAULT_LANDMARK_COUNT = 33;
@@ -18,9 +20,9 @@ function cleanAngles(angles = {}) {
   return out;
 }
 
-function sortedJoints(joints = [], angles = {}) {
-  const list = joints.length ? joints : Object.keys(angles || {});
-  return [...new Set(list.filter(Boolean))].sort();
+function featureJoints(joints = [], angles = {}) {
+  const list = joints.length ? joints : Object.keys(angles || {}).sort();
+  return [...new Set(list.filter(Boolean))];
 }
 
 function padLandmarks(landmarks = [], count = DEFAULT_LANDMARK_COUNT) {
@@ -28,6 +30,17 @@ function padLandmarks(landmarks = [], count = DEFAULT_LANDMARK_COUNT) {
   const out = tuples.slice(0, count);
   while (out.length < count) out.push([0, 0, 0, 0]);
   return out;
+}
+
+function landmarkTupleByName(landmarks = [], name) {
+  const index = idx(name);
+  if (index < 0) return [0, 0, 0, 0];
+  return landmarkToTuple(landmarks?.[index]);
+}
+
+function landmarksForSchema(landmarks = [], schema = null, landmarkCount = DEFAULT_LANDMARK_COUNT) {
+  if (!schema?.modelInputLandmarks?.length) return padLandmarks(landmarks, landmarkCount);
+  return schema.modelInputLandmarks.map((name) => landmarkTupleByName(landmarks, name));
 }
 
 function meanVisibility(landmarks = []) {
@@ -61,11 +74,19 @@ export function extractMotionFeatures(frame = {}, {
   previousFrame = null,
   joints = [],
   landmarkCount = DEFAULT_LANDMARK_COUNT,
+  landmarkSchemaId = frame.landmarkSchemaId || frame.metadata?.landmarkSchemaId || null,
+  landmarkSchema = null,
+  exercise = null,
   progress = null,
 } = {}) {
-  const landmarks = padLandmarks(frame.landmarks, landmarkCount);
+  const requestedSchemaId = landmarkSchemaId || exercise?.landmarkSchemaId || null;
+  const schema = landmarkSchema || (requestedSchemaId
+    ? resolveBodyRegionLandmarkSchema(requestedSchemaId, { fallback: false })
+    : (exercise?.bodyRegion ? getBodyRegionLandmarkSchema(exercise) : null));
+  const schemaMissing = !!requestedSchemaId && !schema;
+  const landmarks = schemaMissing ? [] : landmarksForSchema(frame.landmarks, schema, landmarkCount);
   const angles = cleanAngles(frame.angles || frame.jointAngles || {});
-  const orderedJoints = sortedJoints(joints, angles);
+  const orderedJoints = schemaMissing ? [] : featureJoints(joints.length ? joints : (schema?.jointNames || []), angles);
   const previousAngles = previousFrame ? cleanAngles(previousFrame.angles || previousFrame.jointAngles || {}) : {};
   const dtMs = previousFrame ? timestampOf(frame) - timestampOf(previousFrame) : 0;
   const velocities = angleVelocity(angles, previousAngles, dtMs, orderedJoints);
@@ -76,7 +97,7 @@ export function extractMotionFeatures(frame = {}, {
   );
   const progressEstimate = finiteNumber(progress ?? frame.progress ?? frame.progressPct, 0);
 
-  const featureVector = [
+  const featureVector = schemaMissing ? [] : [
     ...landmarks.flat(),
     ...orderedJoints.map((joint) => finiteNumber(angles[joint])),
     ...orderedJoints.map((joint) => finiteNumber(velocities[joint])),
@@ -97,7 +118,28 @@ export function extractMotionFeatures(frame = {}, {
     insideFrame: boundaryStatus === 'inside',
     visibilityScore,
     featureVector,
+    landmarkSchemaId: schema?.id || requestedSchemaId || null,
+    modelInputLandmarks: schema?.modelInputLandmarks ? [...schema.modelInputLandmarks] : null,
+    featureSize: featureVector.length,
+    schemaMissing,
   };
+}
+
+export function expectedMotionFeatureSizeForSchema({
+  landmarkSchemaId = null,
+  landmarkSchema = null,
+  exercise = null,
+  joints = [],
+  landmarkCount = DEFAULT_LANDMARK_COUNT,
+} = {}) {
+  const requestedSchemaId = landmarkSchemaId || exercise?.landmarkSchemaId || null;
+  const schema = landmarkSchema || (requestedSchemaId
+    ? resolveBodyRegionLandmarkSchema(requestedSchemaId, { fallback: false })
+    : (exercise?.bodyRegion ? getBodyRegionLandmarkSchema(exercise) : null));
+  if (requestedSchemaId && !schema) return 0;
+  const landmarkSize = (schema?.modelInputLandmarks?.length || landmarkCount) * 4;
+  const orderedJoints = featureJoints(joints.length ? joints : (schema?.jointNames || []), {});
+  return landmarkSize + orderedJoints.length * 2 + 3;
 }
 
 export function extractMotionFeatureWindow(frames = [], options = {}) {

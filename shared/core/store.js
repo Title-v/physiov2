@@ -107,10 +107,25 @@ const PLAN_DEFAULTS = { freqPerDay: 1, daysPerWeek: 7, durationWeeks: 4, duratio
 const clampInt = (v, min, max, dflt) => { const n = Math.round(Number(v)); return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : dflt; };
 const clampNum = (v, min, max, dflt) => { const n = Number(v); return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : dflt; };
 
+const PLAN_MODEL_SNAPSHOT_KEYS = ['activeModelId', 'modelStatus', 'modelBaseUrl', 'modelUrl'];
+
+export function mergePlanExerciseSnapshot(localSnap = null, remoteSnap = null) {
+  const base = localSnap || remoteSnap || null;
+  if (!base || !remoteSnap || typeof remoteSnap !== 'object') return base;
+  const next = { ...base };
+  for (const key of PLAN_MODEL_SNAPSHOT_KEYS) {
+    if (remoteSnap[key] != null && remoteSnap[key] !== '') next[key] = remoteSnap[key];
+  }
+  return next;
+}
+
 function exerciseForPlan(exerciseId, over = {}) {
   const local = getExercises().find((e) => e.id === exerciseId);
   const remoteSnap = over.exercise || over.exerciseSnapshot || null;
-  if (local) return { ex: local, snap: exerciseSnapshot(local) || remoteSnap };
+  if (local) {
+    const localSnap = exerciseSnapshot(local);
+    return { ex: local, snap: mergePlanExerciseSnapshot(localSnap, remoteSnap) };
+  }
   if (remoteSnap && (remoteSnap.id === exerciseId || remoteSnap.key === exerciseId)) {
     return { ex: remoteSnap, snap: remoteSnap };
   }

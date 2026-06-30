@@ -31,6 +31,17 @@ const checks = [
       && frameSource.includes('aiSignal'),
   },
   {
+    name: 'patient runtime uses optional async AI classifier path',
+    pass: runtimeSource.includes("from '../../shared/ai/MotionTcnRuntime.js'")
+      && runtimeSource.includes("from '../../shared/ai/TcnMotionClassifier.js'")
+      && runtimeSource.includes('modelRegistryFactory = createMotionTcnModelRegistry')
+      && runtimeSource.includes('motionClassifierFactory = createTcnMotionClassifier')
+      && runtimeSource.includes('state.frameProcessor.processPracticeFrameWithAi(frameArgs)')
+      && runtimeSource.includes('motionClassifier: state.motionClassifier')
+      && runtimeSource.includes('classifierOptions: {')
+      && runtimeSource.includes('landmarkSchemaId: exercise.landmarkSchemaId'),
+  },
+  {
     name: 'shared practice frame processor exposes optional async AI signal path',
     pass: frameSource.includes('processPracticeFrameWithAi')
       && frameSource.includes('motionClassifier.predict')

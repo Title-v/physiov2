@@ -20,7 +20,7 @@ test('createMotionTcnModelRegistry lazy-loads model from manifest when TFJS is p
       ok: true,
       async json() {
         assert.equal(url, '/shared/models/motion-tcn/manifest.json');
-        return { version: 'v1', modelPath: './model.json', inputShape: [30, 139] };
+        return { version: 'v1', modelPath: './model.json', inputShape: [30, 139], approved: true };
       },
     }),
     tf: {

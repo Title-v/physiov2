@@ -98,6 +98,12 @@ export function renderCaptureShell({
     h('div', { class: 'clip-player-controls' }, R.previewPlayBtn, R.previewStartBtn, R.previewTargetBtn, R.previewEndBtn, h('span', { class: 'grow' }), R.previewAngle),
     h('div', { class: 'clip-marker-row' }, setStartBtn, setTargetBtn, setEndBtn, exportParamsBtn, exportDatasetBtn),
   );
+  const advancedActionButtons = S.advancedOpen ? [
+    h('button', { class: 'btn', html: icon('cam', { size: 16 }) + ' ' + t('fromImage'), onclick: imageInputClick }),
+    h('button', { class: 'btn', html: icon('check', { size: 16 }) + ' ' + (th ? 'ส่งออก Refs' : 'Export refs'), onclick: exportRefs }),
+    h('button', { class: 'btn', html: icon('plus', { size: 16 }) + ' ' + (th ? 'นำเข้า' : 'Import'), onclick: importRefsClick }),
+    h('button', { class: 'btn ghost', html: icon('trash', { size: 16 }), onclick: clearRef }),
+  ] : [];
 
   const main = h('div', { class: 'cap-main' },
     h('div', { class: 'video-card' },
@@ -110,10 +116,7 @@ export function renderCaptureShell({
         h('div', { class: 'grow' }),
         R.captureBtn,
         R.recordBtn = h('button', { class: 'btn ghost', html: icon('play', { size: 16 }) + ' ' + (th ? 'Record motion' : 'Record motion'), onclick: toggleSequenceRecording }),
-        h('button', { class: 'btn', html: icon('cam', { size: 16 }) + ' ' + t('fromImage'), onclick: imageInputClick }),
-        h('button', { class: 'btn', html: icon('check', { size: 16 }) + ' ' + (th ? 'ส่งออก Refs' : 'Export refs'), onclick: exportRefs }),
-        h('button', { class: 'btn', html: icon('plus', { size: 16 }) + ' ' + (th ? 'นำเข้า' : 'Import'), onclick: importRefsClick }),
-        h('button', { class: 'btn ghost', html: icon('trash', { size: 16 }), onclick: clearRef }),
+        ...advancedActionButtons,
       ),
     ),
     h('div', { id: 'panel', class: 'panel' }),
