@@ -46,6 +46,8 @@ test('train-motion-tcn dry-run validates JSONL dataset and feature shape without
     dataQuality: 'usable',
     trainable: true,
     scoreable: true,
+    repComplete: true,
+    completionSource: 'rule_completed_rep',
     landmarkSchemaId: 'right_arm.v1',
     bodyRegion: 'right_arm',
     primaryRequiredLandmarks: ['right_shoulder', 'right_elbow', 'right_wrist'],
@@ -99,6 +101,8 @@ test('train-motion-tcn dry-run creates deterministic train validation splits', a
     dataQuality: 'usable',
     trainable: true,
     scoreable: true,
+    repComplete: true,
+    completionSource: 'rule_completed_rep',
     landmarkSchemaId: 'right_arm.v1',
     bodyRegion: 'right_arm',
     primaryRequiredLandmarks: ['right_shoulder', 'right_elbow', 'right_wrist'],
@@ -182,6 +186,9 @@ test('train-motion-tcn rejects reviewed rows with unknown landmark schema', asyn
     labelStatus: 'reviewed',
     dataQuality: 'usable',
     trainable: true,
+    scoreable: true,
+    repComplete: true,
+    completionSource: 'rule_completed_rep',
     landmarkSchemaId: 'made_up.v1',
     primaryRequiredLandmarks: ['right_shoulder', 'right_elbow', 'right_wrist'],
     stabilizerRequiredLandmarks: ['left_shoulder', 'right_hip'],
@@ -272,6 +279,8 @@ test('build-motion-features and publish-motion-model preserve schema metadata', 
     dataQuality: 'usable',
     trainable: true,
     scoreable: true,
+    repComplete: true,
+    completionSource: 'rule_completed_rep',
     landmarkSchemaId: 'right_arm.v1',
     bodyRegion: 'right_arm',
     primaryRequiredLandmarks: ['right_shoulder', 'right_elbow', 'right_wrist'],
@@ -318,8 +327,9 @@ test('build-motion-features and publish-motion-model preserve schema metadata', 
         good: 0.91,
         incomplete: 0.82,
         wrong_path: 0.78,
-        unstable: 0.74,
+        unstable: 0.75,
       },
+      falseGoodRate: 0.04,
     },
   }));
   await writeFile(path.join(modelDir, 'manifest.json'), JSON.stringify({
@@ -390,6 +400,56 @@ test('evaluate-motion-tcn-keras dry-run prefers held-out validation split', asyn
   assert.equal(validationSummary.evaluatedSamples, 1);
   assert.equal(allSummary.evaluatedSplit, 'all');
   assert.equal(allSummary.evaluatedSamples, 3);
+});
+
+test('export-keras-to-tfjs dry-run builds manifest from feature and evaluation metadata', async () => {
+  const cwd = process.cwd();
+  const dir = await mkdtemp(path.join(tmpdir(), 'physioai-keras-export-'));
+  const featuresPath = path.join(dir, 'features.json');
+  const evaluationPath = path.join(dir, 'evaluation.json');
+  await writeFile(featuresPath, JSON.stringify({
+    schema: 'physioai.motion_features.v1',
+    landmarkSchemaId: 'right_arm.v1',
+    bodyRegion: 'right_arm',
+    modelInputLandmarks: ['right_shoulder', 'right_elbow', 'right_wrist', 'left_shoulder', 'right_hip'],
+    primaryRequiredLandmarks: ['right_shoulder', 'right_elbow', 'right_wrist'],
+    stabilizerRequiredLandmarks: ['left_shoulder', 'right_hip'],
+    jointNames: ['right_shoulder', 'right_elbow'],
+    inputShape: [4, 27],
+    phases: ['rest', 'moving_to_target', 'target', 'returning'],
+    qualities: ['good', 'incomplete', 'wrong_path', 'unstable'],
+    samples: [],
+  }));
+  await writeFile(evaluationPath, JSON.stringify({
+    evaluation: {
+      evaluatedSplit: 'validation',
+      phaseAccuracy: 0.92,
+      qualityAccuracy: 0.86,
+      perLabelRecall: { good: 0.9, incomplete: 0.9, wrong_path: 0.9, unstable: 0.9 },
+      falseGoodRate: 0.04,
+    },
+    approval: { ok: true, issues: [] },
+  }));
+
+  const exported = await runPython([
+    'training/export_keras_to_tfjs.py',
+    '--model', path.join(dir, 'model.keras'),
+    '--features', featuresPath,
+    '--evaluation', evaluationPath,
+    '--out', path.join(dir, 'out'),
+    '--version', 'keras-test-v1',
+    '--dry-run',
+  ], cwd);
+  const summary = JSON.parse(exported.stdout);
+
+  assert.equal(summary.ok, true);
+  assert.equal(summary.dryRun, true);
+  assert.equal(summary.manifest.version, 'keras-test-v1');
+  assert.equal(summary.manifest.landmarkSchemaId, 'right_arm.v1');
+  assert.deepEqual(summary.manifest.inputShape, [4, 27]);
+  assert.equal(summary.manifest.approved, false);
+  assert.equal(summary.manifest.approval.ok, true);
+  assert.equal(summary.manifest.evaluation.falseGoodRate, 0.04);
 });
 
 test('publish-motion-model rejects incomplete schema manifest metadata', async () => {
@@ -522,6 +582,7 @@ test('publish-motion-model evaluates current metrics instead of trusting stale m
       phaseAccuracy: 0.92,
       qualityAccuracy: 0.76,
       perLabelRecall: { good: 0.9, incomplete: 0.9, wrong_path: 0.9, unstable: 0.9 },
+      falseGoodRate: 0.04,
     },
   }));
 
@@ -568,6 +629,7 @@ test('publish-motion-model refuses approval from non-validation evaluation split
       phaseAccuracy: 0.92,
       qualityAccuracy: 0.86,
       perLabelRecall: { good: 0.9, incomplete: 0.9, wrong_path: 0.9, unstable: 0.9 },
+      falseGoodRate: 0.04,
     },
   }));
 

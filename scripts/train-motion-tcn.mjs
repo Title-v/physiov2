@@ -8,7 +8,7 @@ import { extractMotionFeatureWindow } from '../shared/ai/MotionFeatureExtractor.
 import { TCN_PHASES, TCN_QUALITIES } from '../shared/ai/TcnMotionClassifier.js';
 import { modelManifestSchemaFields, resolveBodyRegionLandmarkSchema } from '../shared/ai/BodyRegionLandmarkSchema.js';
 import { normalizeMotionLabel } from '../shared/ai/DatasetLabeler.js';
-import { evaluateModelApproval } from '../shared/ai/ModelApprovalCriteria.js';
+import { evaluateModelApproval, falseGoodRateFromConfusionMatrix } from '../shared/ai/ModelApprovalCriteria.js';
 
 const PHASE_ALIASES = {
   rest_start: 'rest',
@@ -118,6 +118,7 @@ function validateTrainingRow(row, index) {
   if (!quality) issues.push('invalid_or_unlabeled_motion_label');
   if (row.labelStatus !== 'reviewed') issues.push('labelStatus_not_reviewed');
   if (row.trainable !== true) issues.push('trainable_not_true');
+  if (row.repComplete !== true) issues.push('repComplete_true_required');
   if (row.dataQuality !== 'usable') issues.push(`dataQuality_${row.dataQuality || 'missing'}`);
   if (!row.landmarkSchemaId) issues.push('missing_landmarkSchemaId');
   else if (!schema) issues.push('unknown_landmarkSchemaId');
@@ -339,6 +340,7 @@ async function evaluateValidationSamples(tf, model, samples = []) {
       phaseAccuracy: phaseReport.accuracy,
       qualityAccuracy: qualityReport.accuracy,
       perLabelRecall: qualityReport.perLabelRecall,
+      falseGoodRate: falseGoodRateFromConfusionMatrix(qualityReport.confusionMatrix),
       phaseConfusionMatrix: phaseReport.confusionMatrix,
       qualityConfusionMatrix: qualityReport.confusionMatrix,
     };

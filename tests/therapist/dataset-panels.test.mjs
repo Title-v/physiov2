@@ -125,6 +125,8 @@ test('dataset recorder enables API save only for reviewed trainable rows', () =>
     trainable: true,
     dataQuality: 'usable',
     motionLabel: 'good',
+    repComplete: true,
+    completionSource: 'rule_completed_rep',
     landmarkSchemaId: 'right_arm.v1',
     missingPrimary: [],
     missingStabilizer: [],
@@ -186,6 +188,8 @@ test('dataset review disables motion-label buttons for auto rejected reps', () =
           id: 'rep_1',
           dataQuality: 'missing_primary_required',
           labelStatus: 'auto_rejected',
+          repComplete: true,
+          completionSource: 'rule_completed_rep',
           frames: [{}, {}],
           landmarkSchemaId: 'right_arm.v1',
         }],
@@ -204,6 +208,7 @@ test('dataset review disables motion-label buttons for auto rejected reps', () =
   assert.equal(labelButtons.length, 4);
   assert.equal(labelButtons.every((button) => button.props.disabled === ''), true);
   assert.match(textOf(panel), /missing_primary_required/);
+  assert.match(textOf(panel), /Complete: yes · Source: rule_completed_rep/);
   const play = findAll(panel, (node) => node.tag === 'button' && textOf(node) === 'Play')[0];
   assert.equal(play.props.disabled, null);
   play.props.onclick();
@@ -218,8 +223,8 @@ test('dataset review marks the actively playing preview row', () => {
         previewRowIndex: 1,
         previewPlaying: true,
         rows: [
-          { id: 'rep_1', dataQuality: 'usable', labelStatus: 'draft', frames: [{}], landmarkSchemaId: 'right_arm.v1' },
-          { id: 'rep_2', dataQuality: 'usable', labelStatus: 'draft', frames: [{}], landmarkSchemaId: 'right_arm.v1' },
+          { id: 'rep_1', dataQuality: 'usable', labelStatus: 'draft', repComplete: true, completionSource: 'rule_completed_rep', frames: [{}], landmarkSchemaId: 'right_arm.v1' },
+          { id: 'rep_2', dataQuality: 'usable', labelStatus: 'draft', repComplete: true, completionSource: 'rule_completed_rep', frames: [{}], landmarkSchemaId: 'right_arm.v1' },
         ],
       },
     },
@@ -235,4 +240,35 @@ test('dataset review marks the actively playing preview row', () => {
 
   assert.match(textOf(panel), /previewing/);
   assert.equal(playButtons[1].props.class, 'mini primary');
+});
+
+test('dataset review disables motion-label buttons for manual stop clips', () => {
+  const panel = renderDatasetReviewPanel({
+    S: {
+      dataset: {
+        reviewOpen: true,
+        rows: [{
+          id: 'rep_manual',
+          dataQuality: 'usable',
+          labelStatus: 'draft',
+          repComplete: false,
+          completionSource: 'manual_stop',
+          frames: [{}],
+          landmarkSchemaId: 'right_arm.v1',
+        }],
+      },
+    },
+    h,
+    actions: {
+      previewDatasetRep() {},
+      reviewDatasetRep() {},
+      skipDatasetRep() {},
+      toggleDatasetReview() {},
+    },
+  });
+  const labelButtons = findAll(panel, (node) => node.tag === 'button' && ['Good', 'Incomplete', 'Wrong path', 'Unstable'].includes(textOf(node)));
+
+  assert.equal(labelButtons.every((button) => button.props.disabled === ''), true);
+  assert.match(textOf(panel), /Complete: no · Source: manual_stop/);
+  assert.match(textOf(panel), /not trainable/);
 });

@@ -361,6 +361,12 @@ function motionClipEditor({
   const model = buildMotionClipEditorModel(seq, ex, { lang, formatMs });
   if (!model) return null;
   const rangeStyle = { width: '100%', accentColor: 'var(--brand)' };
+  const debugExportButtons = S.advancedOpen ? [
+    h('button', { class: 'btn', onclick: exportSkeletonParameters,
+      html: icon('download', { size: 16 }) + ' Debug JSON' }),
+    h('button', { class: 'btn', onclick: exportMotionDatasetJsonl,
+      html: icon('download', { size: 16 }) + ' Debug JSONL' }),
+  ] : [];
   const saveSelected = async () => {
     if (model.frames.length < SEQUENCE_MIN_FRAMES) {
       toast(lang === 'th' ? 'ช่วงที่เลือกสั้นเกินไป' : 'Selected clip is too short.');
@@ -445,10 +451,7 @@ function motionClipEditor({
     h('div', { class: 'row gap6' },
       h('button', { class: 'btn primary', style: { flex: '1' }, onclick: saveSelected,
         html: icon('check', { size: 16, color: '#FBFAF5' }) + ' ' + (lang === 'th' ? 'บันทึก 1 รอบเต็ม' : 'Save full cycle') }),
-      h('button', { class: 'btn', onclick: exportSkeletonParameters,
-        html: icon('download', { size: 16 }) + ' Export JSON' }),
-      h('button', { class: 'btn', onclick: exportMotionDatasetJsonl,
-        html: icon('download', { size: 16 }) + ' Export JSONL' }),
+      ...debugExportButtons,
       h('button', { class: 'btn ghost', onclick: discard }, lang === 'th' ? 'ทิ้ง' : 'Discard')),
   );
 }

@@ -5,6 +5,7 @@ const DEFAULT_LABEL = 'unlabeled';
 const DEFAULT_SUBJECT_ID = 'anon_001';
 const DEFAULT_DATA_QUALITY = 'usable';
 const DEFAULT_LABEL_STATUS = 'draft';
+const DEFAULT_COMPLETION_SOURCE = 'unknown';
 
 function finiteNumber(value, fallback = 0) {
   const n = Number(value);
@@ -66,6 +67,8 @@ export function buildMotionDatasetRow({
   labelStatus = DEFAULT_LABEL_STATUS,
   trainable = false,
   scoreable = false,
+  repComplete = false,
+  completionSource = DEFAULT_COMPLETION_SOURCE,
   missingPrimary = [],
   missingStabilizer = [],
   landmarkSchemaId = null,
@@ -86,6 +89,7 @@ export function buildMotionDatasetRow({
   const phases = phaseLabels.length
     ? [...phaseLabels]
     : [...new Set(normalizedFrames.map((frame) => frame.phase).filter(Boolean))];
+  const complete = repComplete === true;
 
   return {
     version: MOTION_DATASET_SCHEMA_VERSION,
@@ -95,8 +99,10 @@ export function buildMotionDatasetRow({
     suggestedLabel,
     dataQuality,
     labelStatus,
-    trainable: trainable === true,
-    scoreable: scoreable === true,
+    trainable: trainable === true && complete,
+    scoreable: scoreable === true && complete,
+    repComplete: complete,
+    completionSource: completionSource || DEFAULT_COMPLETION_SOURCE,
     missingPrimary: [...new Set(missingPrimary || [])],
     missingStabilizer: [...new Set(missingStabilizer || [])],
     landmarkSchemaId: landmarkSchemaId || metadata?.landmarkSchemaId || null,
@@ -113,6 +119,8 @@ export function buildMotionDatasetRow({
       ...metadata,
       landmarkSchemaId: landmarkSchemaId || metadata?.landmarkSchemaId || null,
       bodyRegion: bodyRegion || metadata?.bodyRegion || null,
+      repComplete: complete,
+      completionSource: completionSource || DEFAULT_COMPLETION_SOURCE,
       primaryRequiredLandmarks: [...new Set(primaryRequiredLandmarks || metadata?.primaryRequiredLandmarks || [])],
       stabilizerRequiredLandmarks: [...new Set(stabilizerRequiredLandmarks || metadata?.stabilizerRequiredLandmarks || [])],
       modelInputLandmarks: [...new Set(modelInputLandmarks || metadata?.modelInputLandmarks || [])],
@@ -132,6 +140,8 @@ export function buildMotionDatasetRowFromSkeletonPayload(payload, options = {}) 
     labelStatus: options.labelStatus || DEFAULT_LABEL_STATUS,
     trainable: options.trainable === true,
     scoreable: options.scoreable === true,
+    repComplete: options.repComplete === true,
+    completionSource: options.completionSource || 'debug_skeleton_export',
     missingPrimary: options.missingPrimary || [],
     missingStabilizer: options.missingStabilizer || [],
     landmarkSchemaId: options.landmarkSchemaId || payload?.exercise?.landmarkSchemaId || payload?.flags?.landmarkSchemaId || null,

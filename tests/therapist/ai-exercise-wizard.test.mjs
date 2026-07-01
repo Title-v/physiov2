@@ -51,6 +51,8 @@ function row(label = 'good', subjectId = 's1') {
     labelStatus: 'reviewed',
     trainable: true,
     scoreable: true,
+    repComplete: true,
+    completionSource: 'rule_completed_rep',
     dataQuality: 'usable',
     missingPrimary: [],
     missingStabilizer: [],

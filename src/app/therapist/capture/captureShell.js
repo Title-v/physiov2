@@ -88,8 +88,12 @@ export function renderCaptureShell({
   const setStartBtn = h('button', { class: 'mini', onclick: () => setSequenceMarkerFromPreview('start') }, th ? 'ตั้ง start' : 'Set start');
   const setTargetBtn = h('button', { class: 'mini', onclick: () => setSequenceMarkerFromPreview('target') }, th ? 'ตั้ง target' : 'Set target');
   const setEndBtn = h('button', { class: 'mini', onclick: () => setSequenceMarkerFromPreview('end') }, th ? 'ตั้ง end' : 'Set end');
-  const exportParamsBtn = h('button', { class: 'mini', onclick: exportSkeletonParameters }, 'Export JSON');
-  const exportDatasetBtn = h('button', { class: 'mini', onclick: exportMotionDatasetJsonl }, 'Export JSONL');
+  const exportParamsBtn = S.advancedOpen
+    ? h('button', { class: 'mini', onclick: exportSkeletonParameters }, 'Debug JSON')
+    : null;
+  const exportDatasetBtn = S.advancedOpen
+    ? h('button', { class: 'mini', onclick: exportMotionDatasetJsonl }, 'Debug JSONL')
+    : null;
   R.previewWrap = h('div', { class: 'clip-player hidden' },
     h('div', { class: 'clip-player-head' },
       h('span', { class: 'eyebrow' }, th ? 'ดู Motion' : 'Motion preview'),

@@ -23,6 +23,8 @@ export function renderDatasetReviewPanel({
     ...(S.dataset.reviewOpen ? rows.map((row, index) => {
       const reviewed = row.labelStatus === 'reviewed';
       const rejected = row.labelStatus === 'auto_rejected' || row.dataQuality !== 'usable';
+      const incomplete = row.repComplete !== true;
+      const canReview = !rejected && !incomplete;
       const previewing = S.dataset.previewRowIndex === index && S.dataset.previewPlaying;
       return h('div', { class: 'col gap6', style: { borderTop: '1px solid var(--line)', paddingTop: '8px' } },
         h('div', { class: 'row between', style: { alignItems: 'baseline' } },
@@ -31,6 +33,12 @@ export function renderDatasetReviewPanel({
             previewing ? 'previewing' : reviewed ? `reviewed ${row.motionLabel}` : (row.dataQuality || row.labelStatus || 'draft'))),
         h('div', { class: 'muted', style: { fontSize: '12px' } },
           `${row.frames?.length || 0} frames · schema ${row.landmarkSchemaId || 'missing'}`),
+        h('div', { class: 'muted', style: { fontSize: '12px' } },
+          `Complete: ${row.repComplete === true ? 'yes' : 'no'} · Source: ${row.completionSource || 'unknown'}`),
+        incomplete ? h('div', { class: 'muted', style: { fontSize: '12px' } },
+          lang === 'th'
+            ? 'manual stop/incomplete clip ยังไม่ใช้ train'
+            : 'Manual stop or incomplete clips are not trainable.') : null,
         h('div', { class: 'row gap6 wrap' },
           h('button', {
             class: 'mini' + (previewing ? ' primary' : ''),
@@ -39,7 +47,7 @@ export function renderDatasetReviewPanel({
           }, lang === 'th' ? 'เล่น' : 'Play'),
           ...LABELS.map(([value, en, th]) => h('button', {
             class: 'mini',
-            disabled: rejected ? '' : null,
+            disabled: canReview ? null : '',
             onclick: () => actions.reviewDatasetRep(index, value),
           }, lang === 'th' ? th : en)),
           h('button', { class: 'mini', onclick: () => actions.skipDatasetRep(index) }, lang === 'th' ? 'ข้าม' : 'Skip')),

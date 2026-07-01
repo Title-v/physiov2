@@ -262,6 +262,9 @@ test('preview controller converts skeleton payload to Phase 7 dataset JSONL', ()
   assert.equal(row.version, 1);
   assert.equal(row.exerciseId, 'shoulder');
   assert.equal(row.subjectId, 'anon_test');
+  assert.equal(row.trainable, false);
+  assert.equal(row.repComplete, false);
+  assert.equal(row.completionSource, 'debug_skeleton_export');
   assert.deepEqual(row.phaseLabels, ['rest_start', 'target', 'rest_end']);
   assert.equal(parsed.frames.length, 3);
   assert.deepEqual(parsed.frames[1].angles, { right_shoulder: 55 });

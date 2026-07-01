@@ -19,6 +19,7 @@
     "publish:tcn": "node scripts/publish-motion-model.mjs",
     "train:tcn:keras": "python3 training/train_motion_tcn_keras.py",
     "evaluate:tcn:keras": "python3 training/evaluate_motion_tcn_keras.py",
+    "export:tcn:keras": "python3 training/export_keras_to_tfjs.py",
     "supabase:login": "npx supabase login",
     "supabase:link": "npx supabase link --project-ref hptkdtzrhotmasznecwj",
     "supabase:push": "npx supabase db push --linked",

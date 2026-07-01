@@ -23,3 +23,10 @@ export function datasetPhaseFromSnapshot(snapshot = null) {
 export function completedDatasetRepFromSnapshot(snapshot = null) {
   return snapshot?.completedRep || snapshot?.aiCompletedRep || null;
 }
+
+export function completionSourceFromSnapshot(snapshot = null) {
+  const rep = completedDatasetRepFromSnapshot(snapshot);
+  if (!rep) return null;
+  if (rep.repSource === 'ai_primary' || rep.aiPhaseRep || snapshot?.aiCompletedRep) return 'ai_phase';
+  return 'rule_completed_rep';
+}

@@ -24,6 +24,8 @@ test('reviewDatasetRow is the only path that turns a usable draft row trainable'
     dataQuality: 'usable',
     labelStatus: 'draft',
     trainable: false,
+    repComplete: true,
+    completionSource: 'rule_completed_rep',
     landmarkSchemaId: 'right_arm.v1',
     missingPrimary: [],
     missingStabilizer: [],
@@ -68,6 +70,8 @@ test('motion dataset recorder stores safety metadata and creates draft rows for 
   assert.equal(row.dataQuality, 'usable');
   assert.equal(row.labelStatus, 'draft');
   assert.equal(row.trainable, false);
+  assert.equal(row.repComplete, true);
+  assert.equal(row.completionSource, 'rule_completed_rep');
   assert.equal(row.landmarkSchemaId, 'right_arm.v1');
   assert.deepEqual(row.primaryRequiredLandmarks, rightArmExercise.primaryRequiredLandmarks);
   assert.equal(row.frames.length, 1);
@@ -105,6 +109,7 @@ test('motion dataset recorder tolerates brief landmark flicker within threshold'
   assert.deepEqual(row.missingPrimary, []);
   assert.equal(row.labelStatus, 'reviewed');
   assert.equal(row.trainable, true);
+  assert.equal(row.repComplete, true);
 });
 
 test('motion dataset recorder rejects reps when missing stabilizer exceeds threshold', () => {
@@ -140,4 +145,37 @@ test('motion dataset recorder rejects reps when missing stabilizer exceeds thres
   assert.equal(row.labelStatus, 'auto_rejected');
   assert.equal(row.motionLabel, null);
   assert.equal(row.trainable, false);
+});
+
+test('manual stop rows stay incomplete and cannot become trainable by review', () => {
+  const recorder = createMotionDatasetRecorder({
+    exercise: rightArmExercise,
+    landmarkSchemaId: 'right_arm.v1',
+    labelTarget: 'good',
+  });
+
+  recorder.start();
+  recorder.pushFrame({
+    landmarks: makeBasePose(),
+    safety: {
+      dataQuality: 'usable',
+      schemaId: 'right_arm.v1',
+      missingPrimary: [],
+      missingStabilizer: [],
+    },
+  });
+  const row = recorder.completeRep({
+    reviewed: false,
+    repComplete: false,
+    completionSource: 'manual_stop',
+  });
+  const reviewed = reviewDatasetRow(row, 'good');
+
+  assert.equal(row.repComplete, false);
+  assert.equal(row.completionSource, 'manual_stop');
+  assert.equal(row.labelStatus, 'draft');
+  assert.equal(row.trainable, false);
+  assert.equal(reviewed.labelStatus, 'reviewed');
+  assert.equal(reviewed.trainable, false);
+  assert.equal(isReviewedTrainableRow(reviewed), false);
 });

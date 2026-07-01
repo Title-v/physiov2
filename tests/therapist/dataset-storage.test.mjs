@@ -17,6 +17,8 @@ function row(overrides = {}) {
     dataQuality: 'usable',
     trainable: true,
     scoreable: true,
+    repComplete: true,
+    completionSource: 'rule_completed_rep',
     missingPrimary: [],
     missingStabilizer: [],
     frames: [{ t: 0 }],

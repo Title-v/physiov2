@@ -8,6 +8,14 @@ import json
 from pathlib import Path
 
 
+APPROVAL_CRITERIA = {
+    "phaseAccuracy": 0.90,
+    "qualityAccuracy": 0.85,
+    "perLabelRecall": 0.75,
+    "falseGoodRate": 0.05,
+}
+
+
 def load_features(path: Path) -> dict:
     payload = json.loads(path.read_text(encoding="utf-8"))
     if payload.get("schema") != "physioai.motion_features.v1":
@@ -67,6 +75,36 @@ def classification_report(true_ids, pred_ids, labels):
     }
 
 
+def false_good_rate_from_confusion_matrix(matrix):
+    bad_labels = ["incomplete", "wrong_path", "unstable"]
+    bad_total = 0
+    bad_predicted_good = 0
+    for label in bad_labels:
+        row = matrix.get(label, {})
+        bad_total += sum(int(value or 0) for value in row.values())
+        bad_predicted_good += int(row.get("good", 0) or 0)
+    return (bad_predicted_good / bad_total) if bad_total else 0.0
+
+
+def evaluate_approval(evaluation):
+    issues = []
+    if float(evaluation.get("phaseAccuracy", 0.0)) < APPROVAL_CRITERIA["phaseAccuracy"]:
+        issues.append("phase_accuracy_below_threshold")
+    if float(evaluation.get("qualityAccuracy", 0.0)) < APPROVAL_CRITERIA["qualityAccuracy"]:
+        issues.append("quality_accuracy_below_threshold")
+    recall = evaluation.get("perLabelRecall", {})
+    for label in ["good", "incomplete", "wrong_path", "unstable"]:
+        if float(recall.get(label, 0.0)) < APPROVAL_CRITERIA["perLabelRecall"]:
+            issues.append(f"recall_{label}_below_threshold")
+    if float(evaluation.get("falseGoodRate", 1.0)) > APPROVAL_CRITERIA["falseGoodRate"]:
+        issues.append("false_good_rate_above_threshold")
+    return {
+        "ok": not issues,
+        "issues": issues,
+        "criteria": APPROVAL_CRITERIA,
+    }
+
+
 def main() -> None:
     args = build_arg_parser().parse_args()
     payload = load_features(Path(args.features))
@@ -120,9 +158,11 @@ def main() -> None:
         "phaseAccuracy": float(phase_report["accuracy"]),
         "qualityAccuracy": float(quality_report["accuracy"]),
         "perLabelRecall": quality_report["perLabelRecall"],
+        "falseGoodRate": false_good_rate_from_confusion_matrix(quality_report["confusionMatrix"]),
         "phaseConfusionMatrix": phase_report["confusionMatrix"],
         "qualityConfusionMatrix": quality_report["confusionMatrix"],
     }
+    summary["approval"] = evaluate_approval(summary["evaluation"])
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")

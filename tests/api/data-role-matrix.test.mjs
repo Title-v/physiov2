@@ -188,6 +188,8 @@ function validDatasetPayload() {
     dataQuality: 'usable',
     trainable: true,
     scoreable: true,
+    repComplete: true,
+    completionSource: 'rule_completed_rep',
     missingPrimary: [],
     missingStabilizer: [],
     primaryRequiredLandmarks: ['right_shoulder', 'right_elbow', 'right_wrist'],

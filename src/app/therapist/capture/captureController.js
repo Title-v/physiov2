@@ -15,7 +15,7 @@ import { createMotionDatasetRecorder } from '../../../../shared/ai/MotionDataset
 import { isReviewedTrainableRow, reviewDatasetRow } from '../../../../shared/ai/DatasetLabeler.js';
 import { motionDatasetRowsToJsonl } from '../../../../shared/ai/MotionDataset.js';
 import { createTherapistCaptureState, resetValidationState } from './captureState.js';
-import { completedDatasetRepFromSnapshot, datasetPhaseFromSnapshot } from './datasetCapture.js';
+import { completedDatasetRepFromSnapshot, completionSourceFromSnapshot, datasetPhaseFromSnapshot } from './datasetCapture.js';
 import {
   persistReferenceForCapture,
   saveHoldReferenceForCapture,
@@ -321,7 +321,7 @@ export function mountTherapistCapture() {
     const safeId = safeExportId(S.exId);
     const stamp = exportTimestamp();
     downloadJsonFile(payload, `physioai_skeleton_${safeId}_${stamp}.json`);
-    toast(getLang() === 'th' ? 'Export skeleton parameters แล้ว' : 'Skeleton parameters exported.');
+    toast(getLang() === 'th' ? 'Export debug skeleton JSON แล้ว' : 'Debug skeleton JSON exported.');
   }
 
   function exportMotionDatasetJsonl() {
@@ -342,7 +342,9 @@ export function mountTherapistCapture() {
     const safeId = safeExportId(S.exId);
     const stamp = exportTimestamp();
     downloadTextFile(jsonl, `physioai_dataset_${safeId}_${stamp}.jsonl`, { type: 'application/x-ndjson' });
-    toast(getLang() === 'th' ? 'Export dataset JSONL แล้ว' : 'Dataset JSONL exported.');
+    toast(getLang() === 'th'
+      ? 'Export debug JSONL แล้ว ไฟล์นี้ยังไม่ใช่ trainable rep'
+      : 'Debug JSONL exported. This clip is not a trainable rep.');
   }
 
   function datasetRecorder() {
@@ -391,10 +393,19 @@ export function mountTherapistCapture() {
   function stopDatasetRecording() {
     const recorder = datasetRecorder();
     if (S.dataset.active && recorder.frames.length) {
-      const row = recorder.completeRep({ reviewed: false, suggestedLabel: S.dataset.labelTarget });
+      const row = recorder.completeRep({
+        reviewed: false,
+        suggestedLabel: S.dataset.labelTarget,
+        repComplete: false,
+        completionSource: 'manual_stop',
+      });
       S.dataset.rows = recorder.rows;
       if (row.dataQuality !== 'usable') {
         toast(getLang() === 'th' ? `rep ถูก reject: ${row.dataQuality}` : `Rep rejected: ${row.dataQuality}`);
+      } else {
+        toast(getLang() === 'th'
+          ? 'clip ที่หยุดเองยังไม่ครบ rep จึงไม่ใช้ train'
+          : 'Manual stop created an incomplete clip that is not trainable.');
       }
     }
     recorder.stop();
@@ -421,7 +432,12 @@ export function mountTherapistCapture() {
       },
     });
     if (completedDatasetRepFromSnapshot(snapshot)) {
-      recorder.completeRep({ reviewed: false, suggestedLabel: S.dataset.labelTarget });
+      recorder.completeRep({
+        reviewed: false,
+        suggestedLabel: S.dataset.labelTarget,
+        repComplete: true,
+        completionSource: completionSourceFromSnapshot(snapshot) || 'rule_completed_rep',
+      });
       S.dataset.rows = recorder.rows;
       if (S.dataset.rows.length >= S.dataset.targetReps) {
         S.dataset.active = false;

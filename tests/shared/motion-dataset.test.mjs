@@ -43,6 +43,8 @@ test('buildMotionDatasetRow creates JSONL-ready normalized frame rows', () => {
   assert.equal(row.motionLabel, null);
   assert.equal(row.labelStatus, 'draft');
   assert.equal(row.trainable, false);
+  assert.equal(row.repComplete, false);
+  assert.equal(row.completionSource, 'unknown');
   assert.deepEqual(row.phaseLabels, ['rest', 'target']);
   assert.equal(row.frames[0].t, 0);
   assert.equal(row.frames[1].t, 80);
@@ -78,6 +80,8 @@ test('buildMotionDatasetRowFromSkeletonPayload maps therapist skeleton export to
     dataQuality: 'usable',
     trainable: true,
     scoreable: true,
+    repComplete: true,
+    completionSource: 'rule_completed_rep',
     landmarkSchemaId: 'right_leg.v1',
     primaryRequiredLandmarks: ['right_hip', 'right_knee', 'right_ankle'],
     stabilizerRequiredLandmarks: ['left_hip', 'right_shoulder'],
@@ -91,11 +95,30 @@ test('buildMotionDatasetRowFromSkeletonPayload maps therapist skeleton export to
   assert.equal(row.motionLabel, 'good');
   assert.equal(row.labelStatus, 'reviewed');
   assert.equal(row.trainable, true);
+  assert.equal(row.repComplete, true);
+  assert.equal(row.completionSource, 'rule_completed_rep');
   assert.equal(row.landmarkSchemaId, 'right_leg.v1');
   assert.deepEqual(row.stabilizerRequiredLandmarks, ['left_hip', 'right_shoulder']);
   assert.equal(row.metadata.schema, 'physioai.skeleton_clip.v1');
   assert.deepEqual(row.metadata.selectedRepJoints, ['right_knee']);
   assert.deepEqual(row.frames[0].angles, { right_knee: 95 });
+});
+
+test('skeleton debug JSONL export remains incomplete and untrainable by default', () => {
+  const payload = {
+    exercise: { id: 'shoulder', bodyRegion: 'right_arm' },
+    frames: [{ tMs: 0, landmarks: [{ x: 0.1, y: 0.2, visibility: 0.9 }] }],
+  };
+
+  const row = buildMotionDatasetRowFromSkeletonPayload(payload, {
+    trainable: true,
+    scoreable: true,
+  });
+
+  assert.equal(row.trainable, false);
+  assert.equal(row.scoreable, false);
+  assert.equal(row.repComplete, false);
+  assert.equal(row.completionSource, 'debug_skeleton_export');
 });
 
 test('motion dataset JSONL serializes and parses rows without wrapping array state', () => {

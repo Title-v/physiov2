@@ -98,6 +98,8 @@ function renderCapturePanelFixture({ statePatch = {}, actions = {} } = {}) {
             trainable: true,
             dataQuality: 'usable',
             motionLabel: 'good',
+            repComplete: true,
+            completionSource: 'rule_completed_rep',
             landmarkSchemaId: 'right_arm.v1',
             missingPrimary: [],
             missingStabilizer: [],
@@ -191,4 +193,29 @@ test('renderCapturePanel passes selected AI model manifest into Validate workflo
 
   assert.match(textOf(panel), /right_arm_tcn_v1/);
   assert.match(textOf(panel), /compatible/);
+});
+
+test('motion clip editor keeps manual JSON exports behind Advanced as debug actions', () => {
+  const pendingSequence = {
+    exerciseId: 'shoulder_ai',
+    frames: [
+      { t: 0, landmarks: [], jointAngles: { right_shoulder: 20 } },
+      { t: 100, landmarks: [], jointAngles: { right_shoulder: 70 } },
+      { t: 200, landmarks: [], jointAngles: { right_shoulder: 25 } },
+    ],
+    startIdx: 0,
+    targetIdx: 1,
+    endIdx: 2,
+  };
+  const normal = renderCapturePanelFixture({
+    statePatch: { captureWorkflow: 'reference', pendingSequence, advancedOpen: false },
+  });
+  assert.match(textOf(normal), /Save full cycle/);
+  assert.doesNotMatch(textOf(normal), /Debug JSON/);
+
+  const advanced = renderCapturePanelFixture({
+    statePatch: { captureWorkflow: 'reference', pendingSequence, advancedOpen: true },
+  });
+  assert.match(textOf(advanced), /Debug JSON/);
+  assert.match(textOf(advanced), /Debug JSONL/);
 });

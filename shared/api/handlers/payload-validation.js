@@ -201,6 +201,7 @@ export function validateDatasetPayload(body = {}) {
   if (!MOTION_LABELS.includes(motionLabel)) issues.push(issue('motionLabel', motionLabel ? 'invalid' : 'required'));
   if (body.labelStatus !== 'reviewed') issues.push(issue('labelStatus', 'reviewed_required'));
   if (body.trainable !== true) issues.push(issue('trainable', 'true_required'));
+  if (body.repComplete !== true) issues.push(issue('repComplete', 'true_required'));
   if (body.dataQuality !== 'usable') issues.push(issue('dataQuality', 'usable_required'));
   if (body.missingPrimary?.length) issues.push(issue('missingPrimary', 'must_be_empty'));
   if (body.missingStabilizer?.length) issues.push(issue('missingStabilizer', 'must_be_empty'));

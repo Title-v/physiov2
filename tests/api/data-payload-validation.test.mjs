@@ -60,6 +60,8 @@ function validDatasetPayload() {
     dataQuality: 'usable',
     trainable: true,
     scoreable: true,
+    repComplete: true,
+    completionSource: 'rule_completed_rep',
     missingPrimary: [],
     missingStabilizer: [],
     primaryRequiredLandmarks: ['right_shoulder', 'right_elbow', 'right_wrist'],
@@ -141,6 +143,7 @@ test('data payload validators reject malformed payloads with field-specific issu
   assert.deepEqual(validateSessionPayload({ exerciseId: 'shoulder', summary: [] }).issues, ['summary:object_required']);
   assert.deepEqual(validateSessionPayload({ exerciseId: 'shoulder', scoreSource: 'magic' }).issues, ['scoreSource:invalid']);
   assert.equal(validateDatasetPayload({ ...validDatasetPayload(), labelStatus: 'draft' }).issues.includes('labelStatus:reviewed_required'), true);
+  assert.equal(validateDatasetPayload({ ...validDatasetPayload(), repComplete: false }).issues.includes('repComplete:true_required'), true);
   assert.equal(validateDatasetPayload({ ...validDatasetPayload(), motionLabel: 'unlabeled' }).issues.includes('motionLabel:invalid'), true);
   assert.equal(validateDatasetPayload({ ...validDatasetPayload(), landmarkSchemaId: 'made_up.v1' }).issues.includes('landmarkSchemaId:unknown'), true);
   assert.equal(validateDatasetPayload({
@@ -175,7 +178,8 @@ test('data payload validators reject malformed payloads with field-specific issu
     evaluation: {
       phaseAccuracy: 0.9,
       qualityAccuracy: 0.86,
-      perLabelRecall: { good: 0.9, incomplete: 0.8, wrong_path: 0.75, unstable: 0.72 },
+      perLabelRecall: { good: 0.9, incomplete: 0.8, wrong_path: 0.75, unstable: 0.75 },
+      falseGoodRate: 0.04,
     },
   }).ok, true);
 });

@@ -73,9 +73,12 @@ test('capture shell keeps import export and clear actions behind Advanced', () =
   assert.doesNotMatch(normal, /From image/);
   assert.doesNotMatch(normal, /Export refs/);
   assert.doesNotMatch(normal, /Import/);
+  assert.doesNotMatch(normal, /Debug JSON/);
 
   const advanced = renderShell({ advancedOpen: true });
   assert.match(advanced, /From image/);
   assert.match(advanced, /Export refs/);
   assert.match(advanced, /Import/);
+  assert.match(advanced, /Debug JSON/);
+  assert.match(advanced, /Debug JSONL/);
 });

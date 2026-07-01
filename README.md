@@ -140,6 +140,8 @@ Training data must be reviewed and schema-compatible:
 
 - `labelStatus` must be `reviewed`.
 - `trainable` must be `true`.
+- `repComplete` must be `true`; manual-stop clips are debug/review material,
+  not trainable rows.
 - `dataQuality` must be `usable`.
 - `motionLabel` must be one of `good`, `incomplete`, `wrong_path`, `unstable`.
 - `landmarkSchemaId`, primary landmarks, and stabilizer landmarks must match the
@@ -152,6 +154,7 @@ Training data must be reviewed and schema-compatible:
 | `npm run features:tcn -- --input dataset.jsonl --out training/features/motion-features.json` | Build JS-source-of-truth sliding-window features for Keras. |
 | `npm run train:tcn:keras -- --features training/features/motion-features.json --out training/artifacts/motion-tcn.keras` | Train the Keras model in a Python training environment. |
 | `npm run evaluate:tcn:keras -- --model training/artifacts/motion-tcn.keras --features training/features/motion-features.json` | Evaluate a saved Keras model against feature JSON. |
+| `npm run export:tcn:keras -- --model training/artifacts/motion-tcn.keras --features training/features/motion-features.json --evaluation training/artifacts/evaluation.json --out training/artifacts/tfjs-motion-tcn --version motion-tcn-v1` | Convert Keras to TFJS and write manifest/evaluation metadata. |
 | `npm run train:tcn -- --input dataset.jsonl --out shared/models/motion-tcn` | Optional TFJS-node trainer for local experiments. |
 | `npm run convert:tcn -- --from-tfjs path/to/model --out shared/models/motion-tcn --landmark-schema-id right_arm.v1` | Register an existing TensorFlow.js model and write the browser manifest. |
 | `npm run convert:tcn -- --from-keras path/to/model.keras --out shared/models/motion-tcn --landmark-schema-id right_arm.v1` | Convert a Keras model through `tensorflowjs_converter`, then write the manifest. |

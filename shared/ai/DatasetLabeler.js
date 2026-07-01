@@ -29,6 +29,7 @@ export function normalizeMotionLabel(value) {
 
 export function isReviewedTrainableRow(row = {}) {
   return row.trainable === true &&
+    row.repComplete === true &&
     row.dataQuality === 'usable' &&
     row.labelStatus === LABEL_STATUSES.REVIEWED &&
     !!normalizeMotionLabel(row.motionLabel || row.label) &&
@@ -46,6 +47,7 @@ export function reviewDatasetRow(row = {}, motionLabel) {
   }
   const dataQuality = row.dataQuality || 'usable';
   const trainable = dataQuality === 'usable' &&
+    row.repComplete === true &&
     !!row.landmarkSchemaId &&
     !row.missingPrimary?.length &&
     !row.missingStabilizer?.length;

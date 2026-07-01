@@ -85,23 +85,36 @@ export function createMotionDatasetRecorder({
     return next;
   }
 
-  function completeRep({ suggestedLabel = normalizedLabel, reviewed = false } = {}) {
+  function completeRep({
+    suggestedLabel = normalizedLabel,
+    reviewed = false,
+    repComplete = true,
+    completionSource = 'rule_completed_rep',
+  } = {}) {
     const repFrames = frames.slice();
     frames = [];
     const dataQuality = dataQualityFromFrames(repFrames, thresholds);
     const missingPrimary = missingFromFrames(repFrames, 'missingPrimary', thresholds);
     const missingStabilizer = missingFromFrames(repFrames, 'missingStabilizer', thresholds);
-    const rejected = dataQuality !== 'usable' || missingPrimary.length > 0 || missingStabilizer.length > 0;
+    const complete = repComplete === true;
+    const rejected = !complete || dataQuality !== 'usable' || missingPrimary.length > 0 || missingStabilizer.length > 0;
     const trainable = !rejected && reviewed && !!normalizedLabel;
+    const labelStatus = !complete
+      ? 'draft'
+      : (dataQuality !== 'usable' || missingPrimary.length > 0 || missingStabilizer.length > 0)
+        ? 'auto_rejected'
+        : (reviewed ? 'reviewed' : 'draft');
     const row = buildMotionDatasetRow({
       exerciseId: exercise.id,
       label: trainable ? normalizedLabel : 'unlabeled',
       motionLabel: trainable ? normalizedLabel : null,
       suggestedLabel,
-      labelStatus: rejected ? 'auto_rejected' : (reviewed ? 'reviewed' : 'draft'),
+      labelStatus,
       dataQuality,
       trainable,
       scoreable: trainable,
+      repComplete: complete,
+      completionSource,
       missingPrimary,
       missingStabilizer,
       landmarkSchemaId,
